@@ -1,0 +1,28 @@
+enum UserRole {
+  MEMBER
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  DEACTIVATED
+}
+
+enum IdeaStatus {
+  DRAFT
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+}
+
+enum VoteType {
+  UPVOTE
+  DOWNVOTE
+}
+
+enum PurchaseStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}

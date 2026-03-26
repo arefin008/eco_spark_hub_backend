@@ -14,66 +14,6 @@ CREATE TYPE "VoteType" AS ENUM ('UPVOTE', 'DOWNVOTE');
 CREATE TYPE "PurchaseStatus" AS ENUM ('PENDING', 'PAID', 'FAILED', 'REFUNDED');
 
 -- CreateTable
-CREATE TABLE "User" (
-    "id" TEXT NOT NULL,
-    "name" TEXT NOT NULL,
-    "email" TEXT NOT NULL,
-    "emailVerified" BOOLEAN NOT NULL DEFAULT false,
-    "image" TEXT,
-    "role" "UserRole" NOT NULL DEFAULT 'MEMBER',
-    "status" "UserStatus" NOT NULL DEFAULT 'ACTIVE',
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL,
-
-    CONSTRAINT "User_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "Session" (
-    "id" TEXT NOT NULL,
-    "expiresAt" TIMESTAMP(3) NOT NULL,
-    "token" TEXT NOT NULL,
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL,
-    "ipAddress" TEXT,
-    "userAgent" TEXT,
-    "userId" TEXT NOT NULL,
-
-    CONSTRAINT "Session_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "Account" (
-    "id" TEXT NOT NULL,
-    "accountId" TEXT NOT NULL,
-    "providerId" TEXT NOT NULL,
-    "userId" TEXT NOT NULL,
-    "accessToken" TEXT,
-    "refreshToken" TEXT,
-    "idToken" TEXT,
-    "accessTokenExpiresAt" TIMESTAMP(3),
-    "refreshTokenExpiresAt" TIMESTAMP(3),
-    "scope" TEXT,
-    "password" TEXT,
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL,
-
-    CONSTRAINT "Account_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "Verification" (
-    "id" TEXT NOT NULL,
-    "identifier" TEXT NOT NULL,
-    "value" TEXT NOT NULL,
-    "expiresAt" TIMESTAMP(3) NOT NULL,
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL,
-
-    CONSTRAINT "Verification_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
 CREATE TABLE "Category" (
     "id" TEXT NOT NULL,
     "name" TEXT NOT NULL,
@@ -172,35 +112,65 @@ CREATE TABLE "NewsletterSubscriber" (
     CONSTRAINT "NewsletterSubscriber_pkey" PRIMARY KEY ("id")
 );
 
--- CreateIndex
-CREATE UNIQUE INDEX "User_email_key" ON "User"("email");
+-- CreateTable
+CREATE TABLE "User" (
+    "id" TEXT NOT NULL,
+    "name" TEXT NOT NULL,
+    "email" TEXT NOT NULL,
+    "emailVerified" BOOLEAN NOT NULL DEFAULT false,
+    "image" TEXT,
+    "role" "UserRole" NOT NULL DEFAULT 'MEMBER',
+    "status" "UserStatus" NOT NULL DEFAULT 'ACTIVE',
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
 
--- CreateIndex
-CREATE INDEX "User_role_idx" ON "User"("role");
+    CONSTRAINT "User_pkey" PRIMARY KEY ("id")
+);
 
--- CreateIndex
-CREATE INDEX "User_status_idx" ON "User"("status");
+-- CreateTable
+CREATE TABLE "Session" (
+    "id" TEXT NOT NULL,
+    "expiresAt" TIMESTAMP(3) NOT NULL,
+    "token" TEXT NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+    "ipAddress" TEXT,
+    "userAgent" TEXT,
+    "userId" TEXT NOT NULL,
 
--- CreateIndex
-CREATE UNIQUE INDEX "Session_token_key" ON "Session"("token");
+    CONSTRAINT "Session_pkey" PRIMARY KEY ("id")
+);
 
--- CreateIndex
-CREATE INDEX "Session_userId_idx" ON "Session"("userId");
+-- CreateTable
+CREATE TABLE "Account" (
+    "id" TEXT NOT NULL,
+    "accountId" TEXT NOT NULL,
+    "providerId" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "accessToken" TEXT,
+    "refreshToken" TEXT,
+    "idToken" TEXT,
+    "accessTokenExpiresAt" TIMESTAMP(3),
+    "refreshTokenExpiresAt" TIMESTAMP(3),
+    "scope" TEXT,
+    "password" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
 
--- CreateIndex
-CREATE INDEX "Session_expiresAt_idx" ON "Session"("expiresAt");
+    CONSTRAINT "Account_pkey" PRIMARY KEY ("id")
+);
 
--- CreateIndex
-CREATE INDEX "Account_userId_idx" ON "Account"("userId");
+-- CreateTable
+CREATE TABLE "Verification" (
+    "id" TEXT NOT NULL,
+    "identifier" TEXT NOT NULL,
+    "value" TEXT NOT NULL,
+    "expiresAt" TIMESTAMP(3) NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
 
--- CreateIndex
-CREATE UNIQUE INDEX "Account_providerId_accountId_key" ON "Account"("providerId", "accountId");
-
--- CreateIndex
-CREATE INDEX "Verification_identifier_idx" ON "Verification"("identifier");
-
--- CreateIndex
-CREATE INDEX "Verification_expiresAt_idx" ON "Verification"("expiresAt");
+    CONSTRAINT "Verification_pkey" PRIMARY KEY ("id")
+);
 
 -- CreateIndex
 CREATE UNIQUE INDEX "Category_name_key" ON "Category"("name");
@@ -265,11 +235,35 @@ CREATE UNIQUE INDEX "IdeaPurchase_ideaId_userId_key" ON "IdeaPurchase"("ideaId",
 -- CreateIndex
 CREATE UNIQUE INDEX "NewsletterSubscriber_email_key" ON "NewsletterSubscriber"("email");
 
--- AddForeignKey
-ALTER TABLE "Session" ADD CONSTRAINT "Session_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+-- CreateIndex
+CREATE UNIQUE INDEX "User_email_key" ON "User"("email");
 
--- AddForeignKey
-ALTER TABLE "Account" ADD CONSTRAINT "Account_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+-- CreateIndex
+CREATE INDEX "User_role_idx" ON "User"("role");
+
+-- CreateIndex
+CREATE INDEX "User_status_idx" ON "User"("status");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "Session_token_key" ON "Session"("token");
+
+-- CreateIndex
+CREATE INDEX "Session_userId_idx" ON "Session"("userId");
+
+-- CreateIndex
+CREATE INDEX "Session_expiresAt_idx" ON "Session"("expiresAt");
+
+-- CreateIndex
+CREATE INDEX "Account_userId_idx" ON "Account"("userId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "Account_providerId_accountId_key" ON "Account"("providerId", "accountId");
+
+-- CreateIndex
+CREATE INDEX "Verification_identifier_idx" ON "Verification"("identifier");
+
+-- CreateIndex
+CREATE INDEX "Verification_expiresAt_idx" ON "Verification"("expiresAt");
 
 -- AddForeignKey
 ALTER TABLE "Idea" ADD CONSTRAINT "Idea_authorId_fkey" FOREIGN KEY ("authorId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
@@ -300,3 +294,9 @@ ALTER TABLE "IdeaPurchase" ADD CONSTRAINT "IdeaPurchase_ideaId_fkey" FOREIGN KEY
 
 -- AddForeignKey
 ALTER TABLE "IdeaPurchase" ADD CONSTRAINT "IdeaPurchase_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Session" ADD CONSTRAINT "Session_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Account" ADD CONSTRAINT "Account_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;

@@ -1,0 +1,8 @@
+model NewsletterSubscriber {
+  id          String   @id @default(cuid())
+  email       String   @unique
+  subscribed  Boolean  @default(true)
+  subscribedAt DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
