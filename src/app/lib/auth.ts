@@ -6,6 +6,19 @@ import { envVariables } from "../config/env";
 import { sendEmail } from "../utils/email";
 import { prisma } from "./prisma";
 
+const userAdditionalFields = {
+  role: {
+    type: "string",
+    required: true,
+    defaultValue: UserRole.MEMBER,
+  },
+  status: {
+    type: "string",
+    required: true,
+    defaultValue: UserStatus.ACTIVE,
+  },
+} as const;
+
 export const auth = betterAuth({
   baseURL: envVariables.BETTER_AUTH_URL,
   secret: envVariables.BETTER_AUTH_SECRET,
@@ -53,18 +66,7 @@ export const auth = betterAuth({
     },
   },
   user: {
-    additionalFields: {
-      role: {
-        type: "string",
-        required: true,
-        defaultValue: UserRole.MEMBER,
-      },
-      status: {
-        type: "string",
-        required: true,
-        defaultValue: UserStatus.ACTIVE,
-      },
-    },
+    additionalFields: userAdditionalFields,
   },
   session: {
     expiresIn: 60 * 60 * 24,

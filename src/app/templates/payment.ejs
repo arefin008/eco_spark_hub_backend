@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Payment Confirmation</title>
+    <style>
+      body { font-family: Arial, sans-serif; background: #f4f7fb; padding: 24px; color: #132a13; }
+      .card { max-width: 620px; margin: 0 auto; background: #fff; border-radius: 12px; padding: 24px; border: 1px solid #e4ebe4; }
+      .brand { color: #2d6a4f; font-weight: 700; font-size: 20px; margin-bottom: 8px; }
+      .badge { display: inline-block; background: #d8f3dc; color: #1b4332; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+      table { width: 100%; border-collapse: collapse; margin-top: 16px; }
+      td { padding: 10px 8px; border-bottom: 1px solid #edf2f7; font-size: 14px; }
+      td:first-child { color: #4f5d75; width: 42%; }
+      .amount { font-size: 22px; font-weight: 700; color: #1d3557; }
+      .hint { color: #4f5d75; font-size: 13px; margin-top: 16px; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="brand">EcoSpark Hub</div>
+      <span class="badge">Payment Confirmed</span>
+      <h2>Thank you, <%= name %>!</h2>
+      <p>Your payment for premium idea access has been completed successfully.</p>
+
+      <table>
+        <tr>
+          <td>Idea</td>
+          <td><b><%= ideaTitle %></b></td>
+        </tr>
+        <tr>
+          <td>Amount</td>
+          <td class="amount"><%= amount %> <%= currency %></td>
+        </tr>
+        <tr>
+          <td>Transaction ID</td>
+          <td><%= transactionId %></td>
+        </tr>
+        <tr>
+          <td>Payment Provider</td>
+          <td><%= paymentProvider %></td>
+        </tr>
+        <tr>
+          <td>Paid At</td>
+          <td><%= paidAt %></td>
+        </tr>
+      </table>
+
+      <p class="hint">You can now access the paid idea details from your dashboard.</p>
+    </div>
+  </body>
+</html>
