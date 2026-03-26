@@ -1,9 +1,20 @@
 import { IdeaStatus, PurchaseStatus, VoteType } from "../../../generated/prisma/enums";
+import type { Prisma } from "../../../generated/prisma/client";
 import AppError from "../../errorHelpers/AppError";
 import { prisma } from "../../lib/prisma";
 import { TCreateIdeaPayload, TReviewIdeaPayload, TUpdateIdeaPayload } from "./idea.interface";
 
-const shapeIdea = (idea: any) => {
+type IdeaWithRelations = Prisma.IdeaGetPayload<{
+  include: {
+    category: true;
+    author: { select: { id: true; name: true; email: true } };
+    media: true;
+    votes: { select: { type: true } };
+    _count: { select: { comments: true; votes: true } };
+  };
+}>;
+
+const shapeIdea = (idea: IdeaWithRelations) => {
   const upvotes = idea.votes.filter((v: { type: VoteType }) => v.type === VoteType.UPVOTE).length;
   const downvotes = idea.votes.filter((v: { type: VoteType }) => v.type === VoteType.DOWNVOTE).length;
 
@@ -50,7 +61,7 @@ const getAll = async (query: Record<string, unknown>) => {
   const limit = Number(query.limit || 10);
   const skip = (page - 1) * limit;
 
-  const where: any = {
+  const where: Prisma.IdeaWhereInput = {
     status: IdeaStatus.APPROVED,
   };
 
