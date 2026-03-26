@@ -1,0 +1,226 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+
+enum UserRole {
+  MEMBER
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  DEACTIVATED
+}
+
+enum IdeaStatus {
+  DRAFT
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+}
+
+enum VoteType {
+  UPVOTE
+  DOWNVOTE
+}
+
+enum PurchaseStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+model User {
+  id            String        @id @default(cuid())
+  name          String
+  email         String        @unique
+  emailVerified Boolean       @default(false)
+  image         String?
+  role          UserRole      @default(MEMBER)
+  status        UserStatus    @default(ACTIVE)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  sessions      Session[]
+  accounts      Account[]
+  ideas         Idea[]
+  votes         IdeaVote[]
+  comments      IdeaComment[]
+  purchases     IdeaPurchase[]
+
+  @@index([role])
+  @@index([status])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Account {
+  id                    String    @id @default(cuid())
+  accountId             String
+  providerId            String
+  userId                String
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, accountId])
+  @@index([userId])
+}
+
+model Verification {
+  id         String   @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@index([expiresAt])
+}
+
+model Category {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  ideas       Idea[]
+}
+
+model Idea {
+  id               String         @id @default(cuid())
+  title            String
+  problemStatement String
+  proposedSolution String
+  description      String
+  isPaid           Boolean        @default(false)
+  price            Decimal?       @db.Decimal(10, 2)
+  status           IdeaStatus     @default(DRAFT)
+  rejectionReason  String?
+  isHighlighted    Boolean        @default(false)
+  submittedAt      DateTime?
+  approvedAt       DateTime?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  authorId         String
+  categoryId       String
+  author           User           @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  category         Category       @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  media            IdeaMedia[]
+  votes            IdeaVote[]
+  comments         IdeaComment[]
+  purchases        IdeaPurchase[]
+
+  @@index([authorId])
+  @@index([categoryId])
+  @@index([status])
+  @@index([isPaid])
+  @@index([isHighlighted])
+  @@index([createdAt])
+}
+
+model IdeaMedia {
+  id        String   @id @default(cuid())
+  ideaId    String
+  url       String
+  altText   String?
+  createdAt DateTime @default(now())
+  idea      Idea     @relation(fields: [ideaId], references: [id], onDelete: Cascade)
+
+  @@index([ideaId])
+}
+
+model IdeaVote {
+  id        String   @id @default(cuid())
+  type      VoteType
+  ideaId    String
+  userId    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  idea      Idea     @relation(fields: [ideaId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([ideaId, userId])
+  @@index([ideaId])
+  @@index([userId])
+}
+
+model IdeaComment {
+  id        String        @id @default(cuid())
+  content   String
+  isDeleted Boolean       @default(false)
+  ideaId    String
+  userId    String
+  parentId  String?
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  idea      Idea          @relation(fields: [ideaId], references: [id], onDelete: Cascade)
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parent    IdeaComment?  @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies   IdeaComment[] @relation("CommentReplies")
+
+  @@index([ideaId])
+  @@index([userId])
+  @@index([parentId])
+  @@index([createdAt])
+}
+
+model IdeaPurchase {
+  id             String         @id @default(cuid())
+  ideaId          String
+  userId          String
+  amount          Decimal        @db.Decimal(10, 2)
+  currency        String         @default("BDT")
+  status          PurchaseStatus @default(PENDING)
+  paymentProvider String
+  transactionId   String?        @unique
+  purchasedAt     DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  idea            Idea           @relation(fields: [ideaId], references: [id], onDelete: Cascade)
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([ideaId, userId])
+  @@index([ideaId])
+  @@index([userId])
+  @@index([status])
+}
+
+model NewsletterSubscriber {
+  id          String   @id @default(cuid())
+  email       String   @unique
+  subscribed  Boolean  @default(true)
+  subscribedAt DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
