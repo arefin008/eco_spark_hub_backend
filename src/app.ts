@@ -31,11 +31,21 @@ app.use(
   }),
 );
 
-app.use("/api/auth", toNodeHandler(auth));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(cookieParser());
 app.use(attachRequestUser);
+app.use("/api/auth/sign-up/email", (req, res, next) => {
+  if (req.body?.role === "ADMIN") {
+    return res.status(403).json({
+      success: false,
+      message: "Admin accounts can only be created via seeding",
+    });
+  }
+
+  return next();
+});
+app.use("/api/auth", toNodeHandler(auth));
 
 app.use("/api/v1", IndexRoutes);
 
