@@ -1,17 +1,36 @@
 import { IdeaStatus, PurchaseStatus, VoteType } from "../../../generated/prisma/enums";
+import type { Prisma } from "../../../generated/prisma/client";
 import AppError from "../../errorHelpers/AppError";
 import { prisma } from "../../lib/prisma";
 import {
   TCreateIdeaPayload,
-  TIdeaQueryFilter,
-  TIdeaWithRelations,
   TReviewIdeaPayload,
   TUpdateIdeaPayload,
 } from "./idea.interface";
+import { QueryBuilder } from "../../utils/QueryBuilder";
 
-const shapeIdea = (idea: TIdeaWithRelations) => {
-  const upvotes = idea.votes.filter((v: { type: VoteType }) => v.type === VoteType.UPVOTE).length;
-  const downvotes = idea.votes.filter((v: { type: VoteType }) => v.type === VoteType.DOWNVOTE).length;
+type TIdeaBaseWithRelations = Prisma.IdeaGetPayload<{
+  include: {
+    category: true;
+    author: { select: { id: true; name: true; email: true } };
+    media: true;
+    votes: { select: { type: true } };
+    _count: { select: { comments: true; votes: true } };
+  };
+}>;
+
+type TIdeaQueryFilter = Prisma.IdeaWhereInput;
+
+interface IShapedIdea extends TIdeaBaseWithRelations {
+  upvotes: number;
+  downvotes: number;
+  commentCount: number;
+  voteCount: number;
+}
+
+const shapeIdea = (idea: TIdeaBaseWithRelations): IShapedIdea => {
+  const upvotes = idea.votes.filter((v) => v.type === VoteType.UPVOTE).length;
+  const downvotes = idea.votes.filter((v) => v.type === VoteType.DOWNVOTE).length;
 
   return {
     ...idea,
@@ -52,28 +71,18 @@ const create = async (authorId: string, payload: TCreateIdeaPayload) => {
 };
 
 const getAll = async (query: Record<string, unknown>) => {
-  const page = Number(query.page || 1);
-  const limit = Number(query.limit || 10);
-  const skip = (page - 1) * limit;
+  const queryBuilder = new QueryBuilder<TIdeaQueryFilter, Prisma.IdeaOrderByWithRelationInput>(
+    query as Record<string, string | string[] | undefined>,
+    { status: IdeaStatus.APPROVED },
+    { createdAt: "desc" },
+  )
+    .search(["title", "description", "problemStatement", "proposedSolution"])
+    .filter(["categoryId", "authorId"])
+    .mapFilter("paymentStatus", (value) => value === "PAID")
+    .sort("createdAt", "desc")
+    .paginate(10, 50);
 
-  const where: TIdeaQueryFilter = {
-    status: IdeaStatus.APPROVED,
-  };
-
-  if (query.categoryId) where.categoryId = String(query.categoryId);
-  if (query.authorId) where.authorId = String(query.authorId);
-  if (query.paymentStatus === "FREE") where.isPaid = false;
-  if (query.paymentStatus === "PAID") where.isPaid = true;
-
-  if (query.searchTerm) {
-    const searchTerm = String(query.searchTerm);
-    where.OR = [
-      { title: { contains: searchTerm, mode: "insensitive" } },
-      { description: { contains: searchTerm, mode: "insensitive" } },
-      { problemStatement: { contains: searchTerm, mode: "insensitive" } },
-      { proposedSolution: { contains: searchTerm, mode: "insensitive" } },
-    ];
-  }
+  const { where, orderBy, page, limit, skip } = queryBuilder.build();
 
   const [total, ideas] = await Promise.all([
     prisma.idea.count({ where }),
@@ -81,9 +90,7 @@ const getAll = async (query: Record<string, unknown>) => {
       where,
       skip,
       take: limit,
-      orderBy: {
-        createdAt: "desc",
-      },
+      orderBy,
       include: {
         category: true,
         author: {

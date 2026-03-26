@@ -1,22 +1,44 @@
 import AppError from "../../errorHelpers/AppError";
 import { prisma } from "../../lib/prisma";
 import { TUpdateUserPayload } from "./user.interface";
+import { QueryBuilder } from "../../utils/QueryBuilder";
+import type { Prisma } from "../../../generated/prisma/client";
 
-const getAll = async () => {
-  return prisma.user.findMany({
-    select: {
-      id: true,
-      name: true,
-      email: true,
-      role: true,
-      status: true,
-      emailVerified: true,
-      createdAt: true,
-    },
-    orderBy: {
-      createdAt: "desc",
-    },
-  });
+const getAll = async (query: Record<string, unknown>) => {
+  const queryBuilder = new QueryBuilder<
+    Prisma.UserWhereInput,
+    Prisma.UserOrderByWithRelationInput
+  >(
+    query as Record<string, string | string[] | undefined>,
+    {},
+    { createdAt: "desc" },
+  )
+    .search(["name", "email"])
+    .filter(["role", "status"])
+    .sort("createdAt", "desc")
+    .paginate(20, 100);
+
+  const { where, orderBy, skip, limit, page } = queryBuilder.build();
+  const [total, data] = await Promise.all([
+    prisma.user.count({ where }),
+    prisma.user.findMany({
+      where,
+      orderBy,
+      skip,
+      take: limit,
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        status: true,
+        emailVerified: true,
+        createdAt: true,
+      },
+    }),
+  ]);
+
+  return { meta: { page, limit, total }, data };
 };
 
 const getById = async (id: string) => {

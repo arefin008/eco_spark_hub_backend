@@ -4,14 +4,15 @@ import { catchAsync } from "../../shared/catchAsync";
 import { sendResponse } from "../../shared/sendResponse";
 import { UserService } from "./user.service";
 
-const getAll = catchAsync(async (_req: Request, res: Response) => {
-  const result = await UserService.getAll();
+const getAll = catchAsync(async (req: Request, res: Response) => {
+  const result = await UserService.getAll(req.query);
 
   sendResponse(res, {
     statusCode: status.OK,
     success: true,
     message: "Users fetched successfully",
-    data: result,
+    meta: result.meta,
+    data: result.data,
   });
 });
 
