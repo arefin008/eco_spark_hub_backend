@@ -2,8 +2,26 @@ import { TCreateCategoryPayload, TUpdateCategoryPayload } from "./category.inter
 import { prisma } from "../../lib/prisma";
 import { QueryBuilder } from "../../utils/QueryBuilder";
 import type { Prisma } from "../../../generated/prisma/client";
+import AppError from "../../errorHelpers/AppError";
 
 const create = async (payload: TCreateCategoryPayload) => {
+  const existingCategory = await prisma.category.findFirst({
+    where: {
+      name: {
+        equals: payload.name,
+        mode: "insensitive",
+      },
+    },
+    select: { id: true },
+  });
+
+  if (existingCategory) {
+    throw new AppError(
+      409,
+      "Category already exists. Try another category name.",
+    );
+  }
+
   return prisma.category.create({ data: payload });
 };
 
@@ -35,6 +53,26 @@ const getAll = async (query: Record<string, unknown>) => {
 };
 
 const update = async (id: string, payload: TUpdateCategoryPayload) => {
+  if (payload.name) {
+    const existingCategory = await prisma.category.findFirst({
+      where: {
+        id: { not: id },
+        name: {
+          equals: payload.name,
+          mode: "insensitive",
+        },
+      },
+      select: { id: true },
+    });
+
+    if (existingCategory) {
+      throw new AppError(
+        409,
+        "Category already exists. Try another category name.",
+      );
+    }
+  }
+
   return prisma.category.update({
     where: { id },
     data: payload,

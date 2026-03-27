@@ -36,12 +36,15 @@ app.use(express.json());
 app.use(cookieParser());
 app.use(attachRequestUser);
 app.use("/api/auth/sign-up/email", (req, res, next) => {
-  if (req.body?.role === "ADMIN") {
+  if (req.body?.role && req.body.role !== "MEMBER") {
     return res.status(403).json({
       success: false,
       message: "Admin accounts can only be created via seeding",
     });
   }
+
+  req.body.role = "MEMBER";
+  req.body.status = "ACTIVE";
 
   return next();
 });

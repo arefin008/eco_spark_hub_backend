@@ -7,6 +7,13 @@ import { tokenUtils } from "../../utils/token";
 import { AuthService } from "./auth.service";
 
 const register = catchAsync(async (req: Request, res: Response) => {
+  if (req.body?.role === "ADMIN") {
+    throw new AppError(
+      status.FORBIDDEN,
+      "Admin accounts can only be created through seeding",
+    );
+  }
+
   const result = await AuthService.register(req.body);
 
   tokenUtils.setAccessTokenCookie(res, result.accessToken);

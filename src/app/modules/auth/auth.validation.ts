@@ -6,7 +6,7 @@ export const AuthValidation = {
       name: z.string().min(2),
       email: z.email(),
       password: z.string().min(6),
-    }),
+    }).strict(),
   }),
   login: z.object({
     body: z.object({
