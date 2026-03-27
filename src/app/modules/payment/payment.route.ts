@@ -12,6 +12,18 @@ router.post(
   validateRequest(PaymentValidation.confirm),
   PaymentController.confirm,
 );
+router.get("/stripe/success", PaymentController.stripeSuccess);
+router.get("/stripe/cancel", PaymentController.stripeCancel);
+router.post(
+  "/:purchaseId/checkout",
+  checkAuth("MEMBER", "ADMIN"),
+  PaymentController.createCheckout,
+);
+router.get(
+  "/:purchaseId/status",
+  checkAuth("MEMBER", "ADMIN"),
+  PaymentController.statusById,
+);
 router.post("/webhook", PaymentController.webhook);
 
 export const PaymentRoutes = router;

@@ -8,12 +8,15 @@ import { PurchaseService } from "./purchase.service";
 const create = catchAsync(async (req: Request, res: Response) => {
   if (!req.user?.id) throw new AppError(status.UNAUTHORIZED, "Unauthorized");
 
-  const result = await PurchaseService.create(req.user.id, req.body);
+  const result = await PurchaseService.create(
+    { id: req.user.id, email: req.user.email },
+    req.body,
+  );
 
   sendResponse(res, {
     statusCode: status.CREATED,
     success: true,
-    message: "Purchase created successfully",
+    message: "Purchase initialized successfully",
     data: result,
   });
 });

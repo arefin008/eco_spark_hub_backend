@@ -1,4 +1,4 @@
 export type TCreatePurchasePayload = {
   ideaId: string;
-  paymentProvider: string;
+  paymentProvider?: string;
 };

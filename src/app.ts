@@ -32,7 +32,13 @@ app.use(
 );
 
 app.use(express.urlencoded({ extended: true }));
-app.use(express.json());
+app.use(
+  express.json({
+    verify: (req, _res, buf) => {
+      (req as Request).rawBody = buf;
+    },
+  }),
+);
 app.use(cookieParser());
 app.use(attachRequestUser);
 app.use("/api/auth/sign-up/email", (req, res, next) => {
