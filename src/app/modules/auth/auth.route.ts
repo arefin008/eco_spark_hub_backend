@@ -12,6 +12,8 @@ router.post(
   AuthController.register,
 );
 router.post("/login", validateRequest(AuthValidation.login), AuthController.login);
+router.get("/google", AuthController.googleSignIn);
+router.get("/google/url", AuthController.googleSignInUrl);
 router.post(
   "/refresh-token",
   validateRequest(AuthValidation.refreshToken),

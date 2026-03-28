@@ -1,10 +1,25 @@
 import status from "http-status";
 import { Request, Response } from "express";
+import { envVariables } from "../../config/env";
 import AppError from "../../errorHelpers/AppError";
 import { catchAsync } from "../../shared/catchAsync";
 import { sendResponse } from "../../shared/sendResponse";
 import { tokenUtils } from "../../utils/token";
 import { AuthService } from "./auth.service";
+
+const getRefreshTokenFromHeader = (req: Request) => {
+  const headerValue = req.headers["x-refresh-token"];
+
+  if (typeof headerValue === "string") {
+    return headerValue;
+  }
+
+  if (Array.isArray(headerValue) && typeof headerValue[0] === "string") {
+    return headerValue[0];
+  }
+
+  return undefined;
+};
 
 const register = catchAsync(async (req: Request, res: Response) => {
   if (req.body?.role === "ADMIN") {
@@ -55,6 +70,7 @@ const refreshToken = catchAsync(async (req: Request, res: Response) => {
     typeof req.cookies.refreshToken === "string"
       ? req.cookies.refreshToken
       : undefined,
+    getRefreshTokenFromHeader(req),
     typeof req.cookies["better-auth.session_token"] === "string"
       ? req.cookies["better-auth.session_token"]
       : undefined,
@@ -72,6 +88,34 @@ const refreshToken = catchAsync(async (req: Request, res: Response) => {
     success: true,
     message: "Token refreshed successfully",
     data: result,
+  });
+});
+
+const googleSignIn = catchAsync(async (req: Request, res: Response) => {
+  const callbackUrl =
+    typeof req.query.callbackUrl === "string"
+      ? req.query.callbackUrl
+      : envVariables.FRONTEND_URL;
+
+  res.redirect(
+    status.TEMPORARY_REDIRECT,
+    AuthService.getGoogleSignInUrl(callbackUrl),
+  );
+});
+
+const googleSignInUrl = catchAsync(async (req: Request, res: Response) => {
+  const callbackUrl =
+    typeof req.query.callbackUrl === "string"
+      ? req.query.callbackUrl
+      : envVariables.FRONTEND_URL;
+
+  sendResponse(res, {
+    statusCode: status.OK,
+    success: true,
+    message: "Google sign-in URL generated successfully",
+    data: {
+      url: AuthService.getGoogleSignInUrl(callbackUrl),
+    },
   });
 });
 
@@ -168,6 +212,8 @@ export const AuthController = {
   register,
   login,
   refreshToken,
+  googleSignIn,
+  googleSignInUrl,
   me,
   changePassword,
   logout,

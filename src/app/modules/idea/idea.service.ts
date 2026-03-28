@@ -71,8 +71,19 @@ const create = async (authorId: string, payload: TCreateIdeaPayload) => {
 };
 
 const getAll = async (query: Record<string, unknown>) => {
+  const normalizedSortBy = String(query.sortBy || "RECENT");
+  const prismaSortQuery: Record<string, unknown> = { ...query };
+
+  if (
+    normalizedSortBy === "RECENT" ||
+    normalizedSortBy === "TOP_VOTED" ||
+    normalizedSortBy === "MOST_COMMENTED"
+  ) {
+    prismaSortQuery.sortBy = "createdAt";
+  }
+
   const queryBuilder = new QueryBuilder<TIdeaQueryFilter, Prisma.IdeaOrderByWithRelationInput>(
-    query as Record<string, string | string[] | undefined>,
+    prismaSortQuery as Record<string, string | string[] | undefined>,
     { status: IdeaStatus.APPROVED },
     { createdAt: "desc" },
   )
@@ -109,7 +120,7 @@ const getAll = async (query: Record<string, unknown>) => {
   ]);
 
   const minUpvotes = Number(query.minUpvotes || 0);
-  const sortBy = String(query.sortBy || "RECENT");
+  const sortBy = normalizedSortBy;
 
   let shaped = ideas.map(shapeIdea).filter((idea) => idea.upvotes >= minUpvotes);
 

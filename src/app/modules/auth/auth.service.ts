@@ -30,6 +30,68 @@ type TSignInOrSignUpApiResponse = {
   token?: string;
 };
 
+const getUserById = async (id: string) => {
+  return prisma.user.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      role: true,
+      status: true,
+      emailVerified: true,
+    },
+  });
+};
+
+const getUserBySessionToken = async (sessionToken: string) => {
+  const session = await prisma.session.findUnique({
+    where: { token: sessionToken },
+    select: {
+      token: true,
+      userId: true,
+      expiresAt: true,
+      user: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+          status: true,
+          emailVerified: true,
+        },
+      },
+    },
+  });
+
+  if (!session || session.expiresAt <= new Date()) {
+    throw new AppError(status.UNAUTHORIZED, "Invalid session token");
+  }
+
+  return session.user;
+};
+
+const getTrustedCallbackUrl = (callbackUrl?: string) => {
+  const defaultCallbackUrl = envVariables.FRONTEND_URL;
+
+  if (!callbackUrl) {
+    return defaultCallbackUrl;
+  }
+
+  try {
+    const requestedUrl = new URL(callbackUrl);
+    const allowedOrigin = new URL(defaultCallbackUrl).origin;
+
+    if (requestedUrl.origin !== allowedOrigin) {
+      return defaultCallbackUrl;
+    }
+
+    return requestedUrl.toString();
+  } catch {
+    return defaultCallbackUrl;
+  }
+};
+
 const toTokenPayload = (user: TAuthApiUser): TAuthTokenPayload => ({
   id: user.id,
   email: user.email,
@@ -162,45 +224,43 @@ const login = async (payload: TLoginPayload) => {
 };
 
 const getNewToken = async (
-  payload: TRefreshTokenPayload,
+  payload: TRefreshTokenPayload | undefined,
   cookieRefreshToken?: string,
+  headerRefreshToken?: string,
   sessionToken?: string,
 ) => {
-  const refreshToken = payload.refreshToken || cookieRefreshToken;
+  const refreshToken =
+    payload?.refreshToken || cookieRefreshToken || headerRefreshToken;
+  let user: Awaited<ReturnType<typeof getUserById>> | null = null;
 
-  if (!refreshToken) {
-    throw new AppError(status.UNAUTHORIZED, "Refresh token is required");
+  if (refreshToken) {
+    const verifiedRefreshToken = jwtUtils.verifyToken(
+      refreshToken,
+      envVariables.REFRESH_TOKEN_SECRET,
+    );
+
+    if (!verifiedRefreshToken.success) {
+      throw new AppError(status.UNAUTHORIZED, "Invalid refresh token");
+    }
+
+    if (
+      typeof verifiedRefreshToken.data.id !== "string" ||
+      typeof verifiedRefreshToken.data.email !== "string" ||
+      (verifiedRefreshToken.data.role !== "MEMBER" &&
+        verifiedRefreshToken.data.role !== "ADMIN")
+    ) {
+      throw new AppError(status.UNAUTHORIZED, "Invalid refresh token payload");
+    }
+
+    user = await getUserById(verifiedRefreshToken.data.id);
+  } else if (sessionToken) {
+    user = await getUserBySessionToken(sessionToken);
+  } else {
+    throw new AppError(
+      status.UNAUTHORIZED,
+      "Refresh token or session token is required",
+    );
   }
-
-  const verifiedRefreshToken = jwtUtils.verifyToken(
-    refreshToken,
-    envVariables.REFRESH_TOKEN_SECRET,
-  );
-
-  if (!verifiedRefreshToken.success) {
-    throw new AppError(status.UNAUTHORIZED, "Invalid refresh token");
-  }
-
-  if (
-    typeof verifiedRefreshToken.data.id !== "string" ||
-    typeof verifiedRefreshToken.data.email !== "string" ||
-    (verifiedRefreshToken.data.role !== "MEMBER" &&
-      verifiedRefreshToken.data.role !== "ADMIN")
-  ) {
-    throw new AppError(status.UNAUTHORIZED, "Invalid refresh token payload");
-  }
-
-  const user = await prisma.user.findUnique({
-    where: { id: verifiedRefreshToken.data.id },
-    select: {
-      id: true,
-      name: true,
-      email: true,
-      role: true,
-      status: true,
-      emailVerified: true,
-    },
-  });
 
   if (!user) {
     throw new AppError(status.UNAUTHORIZED, "User not found");
@@ -210,13 +270,10 @@ const getNewToken = async (
     throw new AppError(status.FORBIDDEN, "User account is deactivated");
   }
 
-  if (sessionToken) {
-    const session = await prisma.session.findUnique({
-      where: { token: sessionToken },
-      select: { token: true, userId: true },
-    });
+  if (sessionToken && refreshToken) {
+    const sessionUser = await getUserBySessionToken(sessionToken);
 
-    if (!session || session.userId !== user.id) {
+    if (sessionUser.id !== user.id) {
       throw new AppError(status.UNAUTHORIZED, "Invalid session token");
     }
   }
@@ -238,6 +295,15 @@ const getNewToken = async (
     refreshToken: newRefreshToken,
     sessionToken,
   };
+};
+
+const getGoogleSignInUrl = (callbackUrl?: string) => {
+  const searchParams = new URLSearchParams({
+    provider: "google",
+    callbackURL: getTrustedCallbackUrl(callbackUrl),
+  });
+
+  return `${envVariables.BETTER_AUTH_URL.replace(/\/$/, "")}/api/auth/sign-in/social?${searchParams.toString()}`;
 };
 
 const changePassword = async (
@@ -359,6 +425,7 @@ export const AuthService = {
   register,
   login,
   getNewToken,
+  getGoogleSignInUrl,
   changePassword,
   logout,
   verifyEmail,
