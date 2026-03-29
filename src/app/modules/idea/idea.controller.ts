@@ -19,7 +19,7 @@ const create = catchAsync(async (req: Request, res: Response) => {
 });
 
 const getAll = catchAsync(async (req: Request, res: Response) => {
-  const result = await IdeaService.getAll(req.query);
+  const result = await IdeaService.getAll(req.query, req.user);
 
   sendResponse(res, {
     statusCode: status.OK,

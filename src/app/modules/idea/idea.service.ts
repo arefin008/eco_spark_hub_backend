@@ -28,6 +28,11 @@ interface IShapedIdea extends TIdeaBaseWithRelations {
   voteCount: number;
 }
 
+type TIdeaRequestUser = {
+  id: string;
+  role: "MEMBER" | "ADMIN";
+};
+
 const shapeIdea = (idea: TIdeaBaseWithRelations): IShapedIdea => {
   const upvotes = idea.votes.filter((v) => v.type === VoteType.UPVOTE).length;
   const downvotes = idea.votes.filter((v) => v.type === VoteType.DOWNVOTE).length;
@@ -39,6 +44,23 @@ const shapeIdea = (idea: TIdeaBaseWithRelations): IShapedIdea => {
     commentCount: idea._count.comments,
     voteCount: idea._count.votes,
   };
+};
+
+const resolveIsPaidFilter = (value: string) => {
+  const normalizedValue = value.trim().toUpperCase();
+
+  if (["PAID", "TRUE", "1"].includes(normalizedValue)) {
+    return true;
+  }
+
+  if (["FREE", "FALSE", "0"].includes(normalizedValue)) {
+    return false;
+  }
+
+  throw new AppError(
+    400,
+    "Invalid payment filter. Use PAID, FREE, true, or false",
+  );
 };
 
 const create = async (authorId: string, payload: TCreateIdeaPayload) => {
@@ -70,9 +92,23 @@ const create = async (authorId: string, payload: TCreateIdeaPayload) => {
   });
 };
 
-const getAll = async (query: Record<string, unknown>) => {
+const getAll = async (query: Record<string, unknown>, user?: TIdeaRequestUser) => {
   const normalizedSortBy = String(query.sortBy || "RECENT");
   const prismaSortQuery: Record<string, unknown> = { ...query };
+  const rawStatus = Array.isArray(query.status) ? query.status[0] : query.status;
+  const rawIsPaid = Array.isArray(query.isPaid) ? query.isPaid[0] : query.isPaid;
+  const normalizedStatus =
+    typeof rawStatus === "string" ? rawStatus.toUpperCase() : undefined;
+  const isAdmin = user?.role === "ADMIN";
+
+  const baseWhere: TIdeaQueryFilter =
+    isAdmin && normalizedStatus
+      ? {
+          status: normalizedStatus as IdeaStatus,
+        }
+      : isAdmin
+        ? {}
+        : { status: IdeaStatus.APPROVED };
 
   if (
     normalizedSortBy === "RECENT" ||
@@ -82,14 +118,18 @@ const getAll = async (query: Record<string, unknown>) => {
     prismaSortQuery.sortBy = "createdAt";
   }
 
+  if (rawIsPaid !== undefined && query.paymentStatus === undefined) {
+    prismaSortQuery.paymentStatus = rawIsPaid;
+  }
+
   const queryBuilder = new QueryBuilder<TIdeaQueryFilter, Prisma.IdeaOrderByWithRelationInput>(
     prismaSortQuery as Record<string, string | string[] | undefined>,
-    { status: IdeaStatus.APPROVED },
+    baseWhere,
     { createdAt: "desc" },
   )
     .search(["title", "description", "problemStatement", "proposedSolution"])
     .filter(["categoryId", "authorId"])
-    .mapFilter("paymentStatus", (value) => value === "PAID")
+    .mapFilter("paymentStatus", resolveIsPaidFilter)
     .sort("createdAt", "desc")
     .paginate(10, 50);
 
@@ -142,7 +182,7 @@ const getAll = async (query: Record<string, unknown>) => {
   };
 };
 
-const getById = async (id: string, user?: { id: string; role: "MEMBER" | "ADMIN" }) => {
+const getById = async (id: string, user?: TIdeaRequestUser) => {
   const idea = await prisma.idea.findUnique({
     where: { id },
     include: {
@@ -157,13 +197,16 @@ const getById = async (id: string, user?: { id: string; role: "MEMBER" | "ADMIN"
   if (!idea) throw new AppError(404, "Idea not found");
 
   const shaped = shapeIdea(idea);
+  const isOwner = user?.id === idea.authorId;
+  const isAdmin = user?.role === "ADMIN";
+
+  if (idea.status !== IdeaStatus.APPROVED && !isOwner && !isAdmin) {
+    throw new AppError(404, "Idea not found");
+  }
 
   if (!idea.isPaid) {
     return { ...shaped, canAccess: true };
   }
-
-  const isOwner = user?.id === idea.authorId;
-  const isAdmin = user?.role === "ADMIN";
 
   if (isOwner || isAdmin) {
     return { ...shaped, canAccess: true };
@@ -256,12 +299,19 @@ const submitForReview = async (id: string, userId: string) => {
   const idea = await prisma.idea.findUnique({ where: { id } });
   if (!idea) throw new AppError(404, "Idea not found");
   if (idea.authorId !== userId) throw new AppError(403, "Forbidden");
+  if (idea.status === IdeaStatus.UNDER_REVIEW) {
+    throw new AppError(400, "Idea is already under review");
+  }
+  if (idea.status === IdeaStatus.APPROVED) {
+    throw new AppError(400, "Approved ideas do not need to be resubmitted");
+  }
 
   return prisma.idea.update({
     where: { id },
     data: {
       status: IdeaStatus.UNDER_REVIEW,
       submittedAt: new Date(),
+      approvedAt: null,
       rejectionReason: null,
     },
   });
@@ -270,6 +320,9 @@ const submitForReview = async (id: string, userId: string) => {
 const review = async (id: string, payload: TReviewIdeaPayload) => {
   const idea = await prisma.idea.findUnique({ where: { id } });
   if (!idea) throw new AppError(404, "Idea not found");
+  if (idea.status !== IdeaStatus.UNDER_REVIEW) {
+    throw new AppError(400, "Only ideas under review can be approved or rejected");
+  }
 
   if (payload.action === "REJECT" && !payload.rejectionReason) {
     throw new AppError(400, "Rejection reason is required for rejected ideas");
@@ -286,6 +339,7 @@ const review = async (id: string, payload: TReviewIdeaPayload) => {
           }
         : {
             status: IdeaStatus.REJECTED,
+            approvedAt: null,
             rejectionReason: payload.rejectionReason,
           },
   });
