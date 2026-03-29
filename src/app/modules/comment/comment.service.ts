@@ -2,14 +2,47 @@ import AppError from "../../errorHelpers/AppError";
 import { prisma } from "../../lib/prisma";
 import { TCreateCommentPayload } from "./comment.interface";
 
+type TCommentNode = Awaited<ReturnType<typeof prisma.ideaComment.findMany>>[number] & {
+  replies: TCommentNode[];
+};
+
+const buildCommentTree = (
+  comments: Awaited<ReturnType<typeof prisma.ideaComment.findMany>>,
+) => {
+  const commentMap = new Map<string, TCommentNode>();
+  const rootComments: TCommentNode[] = [];
+
+  for (const comment of comments) {
+    commentMap.set(comment.id, {
+      ...comment,
+      replies: [],
+    });
+  }
+
+  for (const comment of commentMap.values()) {
+    if (comment.parentId) {
+      const parent = commentMap.get(comment.parentId);
+
+      if (parent) {
+        parent.replies.push(comment);
+        continue;
+      }
+    }
+
+    rootComments.push(comment);
+  }
+
+  return rootComments;
+};
+
 const create = async (userId: string, payload: TCreateCommentPayload) => {
   if (payload.parentId) {
     const parent = await prisma.ideaComment.findUnique({
       where: { id: payload.parentId },
-      select: { id: true, ideaId: true },
+      select: { id: true, ideaId: true, isDeleted: true },
     });
 
-    if (!parent || parent.ideaId !== payload.ideaId) {
+    if (!parent || parent.ideaId !== payload.ideaId || parent.isDeleted) {
       throw new AppError(400, "Invalid parent comment for this idea");
     }
   }
@@ -25,7 +58,7 @@ const create = async (userId: string, payload: TCreateCommentPayload) => {
 };
 
 const listByIdea = async (ideaId: string) => {
-  return prisma.ideaComment.findMany({
+  const comments = await prisma.ideaComment.findMany({
     where: {
       ideaId,
       isDeleted: false,
@@ -39,6 +72,8 @@ const listByIdea = async (ideaId: string) => {
       },
     },
   });
+
+  return buildCommentTree(comments);
 };
 
 const remove = async (id: string, user: { id: string; role: "MEMBER" | "ADMIN" }) => {

@@ -92,6 +92,16 @@ const getTrustedCallbackUrl = (callbackUrl?: string) => {
   }
 };
 
+const getGoogleCallbackHandlerUrl = (redirectTo?: string) => {
+  const callbackUrl = new URL(
+    `${envVariables.BETTER_AUTH_URL.replace(/\/$/, "")}/api/v1/auth/google/callback`,
+  );
+
+  callbackUrl.searchParams.set("redirectTo", getTrustedCallbackUrl(redirectTo));
+
+  return callbackUrl.toString();
+};
+
 const toTokenPayload = (user: TAuthApiUser): TAuthTokenPayload => ({
   id: user.id,
   email: user.email,
@@ -256,10 +266,7 @@ const getNewToken = async (
   } else if (sessionToken) {
     user = await getUserBySessionToken(sessionToken);
   } else {
-    throw new AppError(
-      status.UNAUTHORIZED,
-      "Refresh token or session token is required",
-    );
+    return null;
   }
 
   if (!user) {
@@ -300,10 +307,34 @@ const getNewToken = async (
 const getGoogleSignInUrl = (callbackUrl?: string) => {
   const searchParams = new URLSearchParams({
     provider: "google",
-    callbackURL: getTrustedCallbackUrl(callbackUrl),
+    callbackURL: getGoogleCallbackHandlerUrl(callbackUrl),
   });
 
   return `${envVariables.BETTER_AUTH_URL.replace(/\/$/, "")}/api/auth/sign-in/social?${searchParams.toString()}`;
+};
+
+const completeSocialLogin = async (sessionToken: string) => {
+  const user = await getUserBySessionToken(sessionToken);
+
+  if (user.status === UserStatus.DEACTIVATED) {
+    throw new AppError(status.FORBIDDEN, "User account is deactivated");
+  }
+
+  const tokenPayload = toTokenPayload({
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    role: user.role,
+    status: user.status,
+    emailVerified: user.emailVerified,
+  });
+
+  return {
+    accessToken: tokenUtils.getAccessToken(tokenPayload),
+    refreshToken: tokenUtils.getRefreshToken(tokenPayload),
+    sessionToken,
+    user,
+  };
 };
 
 const changePassword = async (
@@ -426,6 +457,7 @@ export const AuthService = {
   login,
   getNewToken,
   getGoogleSignInUrl,
+  completeSocialLogin,
   changePassword,
   logout,
   verifyEmail,

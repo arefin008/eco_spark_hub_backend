@@ -23,6 +23,11 @@ export const auth = betterAuth({
   baseURL: envVariables.BETTER_AUTH_URL,
   secret: envVariables.BETTER_AUTH_SECRET,
   database: prismaAdapter(prisma, { provider: "postgresql" }),
+  account: {
+    // Local Google OAuth can lose the temporary state cookie across redirects.
+    // Keep the security check enabled in production.
+    skipStateCookieCheck: envVariables.NODE_ENV === "development",
+  },
   emailAndPassword: {
     enabled: true,
     requireEmailVerification: true,
@@ -73,7 +78,7 @@ export const auth = betterAuth({
     updateAge: 60 * 60 * 12,
   },
   redirectURLs: {
-    signIn: `${envVariables.BETTER_AUTH_URL}/api/v1/auth/me`,
+    signIn: `${envVariables.BETTER_AUTH_URL}/api/v1/auth/google/callback`,
   },
   trustedOrigins: [envVariables.FRONTEND_URL, envVariables.BETTER_AUTH_URL],
   plugins: [

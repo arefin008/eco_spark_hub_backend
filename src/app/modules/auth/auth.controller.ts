@@ -76,6 +76,16 @@ const refreshToken = catchAsync(async (req: Request, res: Response) => {
       : undefined,
   );
 
+  if (!result) {
+    tokenUtils.clearAuthCookies(res);
+
+    return sendResponse(res, {
+      statusCode: status.UNAUTHORIZED,
+      success: false,
+      message: "Refresh token or session token is required",
+    });
+  }
+
   tokenUtils.setAccessTokenCookie(res, result.accessToken);
   tokenUtils.setRefreshTokenCookie(res, result.refreshToken);
 
@@ -117,6 +127,30 @@ const googleSignInUrl = catchAsync(async (req: Request, res: Response) => {
       url: AuthService.getGoogleSignInUrl(callbackUrl),
     },
   });
+});
+
+const googleCallback = catchAsync(async (req: Request, res: Response) => {
+  const sessionToken =
+    typeof req.cookies["better-auth.session_token"] === "string"
+      ? req.cookies["better-auth.session_token"]
+      : undefined;
+
+  if (!sessionToken) {
+    throw new AppError(status.UNAUTHORIZED, "Session token is required");
+  }
+
+  const result = await AuthService.completeSocialLogin(sessionToken);
+
+  tokenUtils.setAccessTokenCookie(res, result.accessToken);
+  tokenUtils.setRefreshTokenCookie(res, result.refreshToken);
+  tokenUtils.setBetterAuthSessionCookie(res, result.sessionToken);
+
+  const redirectTo =
+    typeof req.query.redirectTo === "string"
+      ? req.query.redirectTo
+      : envVariables.FRONTEND_URL;
+
+  res.redirect(status.TEMPORARY_REDIRECT, redirectTo);
 });
 
 const me = catchAsync(async (req: Request, res: Response) => {
@@ -214,6 +248,7 @@ export const AuthController = {
   refreshToken,
   googleSignIn,
   googleSignInUrl,
+  googleCallback,
   me,
   changePassword,
   logout,
