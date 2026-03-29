@@ -97,6 +97,9 @@ const getAll = async (query: Record<string, unknown>, user?: TIdeaRequestUser) =
   const prismaSortQuery: Record<string, unknown> = { ...query };
   const rawStatus = Array.isArray(query.status) ? query.status[0] : query.status;
   const rawIsPaid = Array.isArray(query.isPaid) ? query.isPaid[0] : query.isPaid;
+  const rawPaymentStatus = Array.isArray(query.paymentStatus)
+    ? query.paymentStatus[0]
+    : query.paymentStatus;
   const normalizedStatus =
     typeof rawStatus === "string" ? rawStatus.toUpperCase() : undefined;
   const isAdmin = user?.role === "ADMIN";
@@ -118,8 +121,10 @@ const getAll = async (query: Record<string, unknown>, user?: TIdeaRequestUser) =
     prismaSortQuery.sortBy = "createdAt";
   }
 
-  if (rawIsPaid !== undefined && query.paymentStatus === undefined) {
-    prismaSortQuery.paymentStatus = rawIsPaid;
+  if (rawPaymentStatus !== undefined) {
+    prismaSortQuery.isPaid = rawPaymentStatus;
+  } else if (rawIsPaid !== undefined) {
+    prismaSortQuery.isPaid = rawIsPaid;
   }
 
   const queryBuilder = new QueryBuilder<TIdeaQueryFilter, Prisma.IdeaOrderByWithRelationInput>(
@@ -129,7 +134,7 @@ const getAll = async (query: Record<string, unknown>, user?: TIdeaRequestUser) =
   )
     .search(["title", "description", "problemStatement", "proposedSolution"])
     .filter(["categoryId", "authorId"])
-    .mapFilter("paymentStatus", resolveIsPaidFilter)
+    .mapFilter("isPaid", resolveIsPaidFilter)
     .sort("createdAt", "desc")
     .paginate(10, 50);
 
