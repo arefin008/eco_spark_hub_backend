@@ -1,0 +1,3433 @@
+var __defProp = Object.defineProperty;
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
+
+// src/app.ts
+import { toNodeHandler } from "better-auth/node";
+import cookieParser from "cookie-parser";
+import cors from "cors";
+import express from "express";
+import path3 from "path";
+import qs from "qs";
+
+// src/app/lib/auth.ts
+import { betterAuth } from "better-auth";
+import { prismaAdapter } from "better-auth/adapters/prisma";
+import { bearer, emailOTP } from "better-auth/plugins";
+
+// src/generated/prisma/enums.ts
+var UserRole = {
+  MEMBER: "MEMBER",
+  ADMIN: "ADMIN"
+};
+var UserStatus = {
+  ACTIVE: "ACTIVE",
+  DEACTIVATED: "DEACTIVATED"
+};
+var IdeaStatus = {
+  DRAFT: "DRAFT",
+  UNDER_REVIEW: "UNDER_REVIEW",
+  APPROVED: "APPROVED",
+  REJECTED: "REJECTED"
+};
+var VoteType = {
+  UPVOTE: "UPVOTE",
+  DOWNVOTE: "DOWNVOTE"
+};
+var PurchaseStatus = {
+  PENDING: "PENDING",
+  PAID: "PAID",
+  FAILED: "FAILED",
+  REFUNDED: "REFUNDED"
+};
+
+// src/app/config/env.ts
+import dotenv from "dotenv";
+import status from "http-status";
+
+// src/app/errorHelpers/AppError.ts
+var AppError = class extends Error {
+  statusCode;
+  constructor(statusCode, message, stack = "") {
+    super(message);
+    this.statusCode = statusCode;
+    if (stack) {
+      this.stack = stack;
+    } else {
+      Error.captureStackTrace(this, this.constructor);
+    }
+  }
+};
+var AppError_default = AppError;
+
+// src/app/config/env.ts
+dotenv.config();
+var loadEnvVariables = () => {
+  const requireEnvVariable = [
+    "NODE_ENV",
+    "PORT",
+    "DATABASE_URL",
+    "BETTER_AUTH_SECRET",
+    "BETTER_AUTH_URL"
+  ];
+  requireEnvVariable.forEach((variable) => {
+    if (!process.env[variable]) {
+      throw new AppError_default(
+        status.INTERNAL_SERVER_ERROR,
+        `Environment variable ${variable} is required but not set in .env file.`
+      );
+    }
+  });
+  return {
+    NODE_ENV: process.env.NODE_ENV,
+    PORT: process.env.PORT,
+    DATABASE_URL: process.env.DATABASE_URL,
+    BETTER_AUTH_SECRET: process.env.BETTER_AUTH_SECRET,
+    BETTER_AUTH_URL: process.env.BETTER_AUTH_URL,
+    ACCESS_TOKEN_SECRET: process.env.ACCESS_TOKEN_SECRET || "dev-access-token-secret",
+    REFRESH_TOKEN_SECRET: process.env.REFRESH_TOKEN_SECRET || "dev-refresh-token-secret",
+    ACCESS_TOKEN_EXPIRES_IN: process.env.ACCESS_TOKEN_EXPIRES_IN || "1h",
+    REFRESH_TOKEN_EXPIRES_IN: process.env.REFRESH_TOKEN_EXPIRES_IN || "7d",
+    BETTER_AUTH_SESSION_TOKEN_EXPIRES_IN: process.env.BETTER_AUTH_SESSION_TOKEN_EXPIRES_IN || "1d",
+    BETTER_AUTH_SESSION_TOKEN_UPDATE_AGE: process.env.BETTER_AUTH_SESSION_TOKEN_UPDATE_AGE || "1h",
+    EMAIL_SENDER: {
+      SMTP_USER: process.env.EMAIL_SENDER_SMTP_USER || "",
+      SMTP_PASS: process.env.EMAIL_SENDER_SMTP_PASS || "",
+      SMTP_HOST: process.env.EMAIL_SENDER_SMTP_HOST || "",
+      SMTP_PORT: process.env.EMAIL_SENDER_SMTP_PORT || "",
+      SMTP_FROM: process.env.EMAIL_SENDER_SMTP_FROM || ""
+    },
+    GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID || "",
+    GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET || "",
+    GOOGLE_CALLBACK_URL: process.env.GOOGLE_CALLBACK_URL || "",
+    FRONTEND_URL: process.env.FRONTEND_URL || "http://localhost:3000",
+    CLOUDINARY: {
+      CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME || "",
+      CLOUDINARY_API_KEY: process.env.CLOUDINARY_API_KEY || "",
+      CLOUDINARY_API_SECRET: process.env.CLOUDINARY_API_SECRET || ""
+    },
+    STRIPE: {
+      STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY || "",
+      STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET || ""
+    },
+    SUPER_ADMIN_EMAIL: process.env.SUPER_ADMIN_EMAIL || "",
+    SUPER_ADMIN_PASSWORD: process.env.SUPER_ADMIN_PASSWORD || ""
+  };
+};
+var envVariables = loadEnvVariables();
+
+// src/app/utils/email.ts
+import ejs from "ejs";
+import nodemailer from "nodemailer";
+import path from "path";
+var transporter = nodemailer.createTransport({
+  host: envVariables.EMAIL_SENDER.SMTP_HOST,
+  port: Number(envVariables.EMAIL_SENDER.SMTP_PORT || 465),
+  secure: true,
+  auth: {
+    user: envVariables.EMAIL_SENDER.SMTP_USER,
+    pass: envVariables.EMAIL_SENDER.SMTP_PASS
+  }
+});
+var sendEmail = async ({
+  to,
+  subject,
+  html,
+  templateName,
+  templateData
+}) => {
+  if (!envVariables.EMAIL_SENDER.SMTP_USER || !envVariables.EMAIL_SENDER.SMTP_PASS) {
+    console.warn("Email sender is not configured. Skipping email send.");
+    return;
+  }
+  let renderedHtml = html || "";
+  if (!renderedHtml && templateName) {
+    const templatePath = path.resolve(
+      process.cwd(),
+      `src/app/templates/${templateName}.ejs`
+    );
+    renderedHtml = await ejs.renderFile(templatePath, templateData || {});
+  }
+  if (!renderedHtml && subject) {
+    renderedHtml = `<p>${subject}</p>`;
+  }
+  await transporter.sendMail({
+    from: envVariables.EMAIL_SENDER.SMTP_FROM || envVariables.EMAIL_SENDER.SMTP_USER,
+    to,
+    subject,
+    html: renderedHtml
+  });
+};
+
+// src/app/lib/prisma.ts
+import "dotenv/config";
+import { PrismaPg } from "@prisma/adapter-pg";
+
+// src/generated/prisma/client.ts
+import * as path2 from "path";
+import { fileURLToPath } from "url";
+
+// src/generated/prisma/internal/class.ts
+import * as runtime from "@prisma/client/runtime/client";
+var config = {
+  "previewFeatures": [],
+  "clientVersion": "7.5.0",
+  "engineVersion": "280c870be64f457428992c43c1f6d557fab6e29e",
+  "activeProvider": "postgresql",
+  "inlineSchema": 'model User {\n  id            String         @id @default(cuid())\n  name          String\n  email         String         @unique\n  emailVerified Boolean        @default(false)\n  image         String?\n  role          UserRole       @default(MEMBER)\n  status        UserStatus     @default(ACTIVE)\n  createdAt     DateTime       @default(now())\n  updatedAt     DateTime       @updatedAt\n  sessions      Session[]\n  accounts      Account[]\n  ideas         Idea[]\n  votes         IdeaVote[]\n  comments      IdeaComment[]\n  purchases     IdeaPurchase[]\n\n  @@index([role])\n  @@index([status])\n}\n\nmodel Session {\n  id        String   @id @default(cuid())\n  expiresAt DateTime\n  token     String   @unique\n  createdAt DateTime @default(now())\n  updatedAt DateTime @updatedAt\n  ipAddress String?\n  userAgent String?\n  userId    String\n  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)\n\n  @@index([userId])\n  @@index([expiresAt])\n}\n\nmodel Account {\n  id                    String    @id @default(cuid())\n  accountId             String\n  providerId            String\n  userId                String\n  accessToken           String?\n  refreshToken          String?\n  idToken               String?\n  accessTokenExpiresAt  DateTime?\n  refreshTokenExpiresAt DateTime?\n  scope                 String?\n  password              String?\n  createdAt             DateTime  @default(now())\n  updatedAt             DateTime  @updatedAt\n  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)\n\n  @@unique([providerId, accountId])\n  @@index([userId])\n}\n\nmodel Verification {\n  id         String   @id @default(cuid())\n  identifier String\n  value      String\n  expiresAt  DateTime\n  createdAt  DateTime @default(now())\n  updatedAt  DateTime @updatedAt\n\n  @@index([identifier])\n  @@index([expiresAt])\n}\n\ngenerator client {\n  provider = "prisma-client"\n  output   = "../../src/generated/prisma"\n}\n\ndatasource db {\n  provider = "postgresql"\n}\n\nenum UserRole {\n  MEMBER\n  ADMIN\n}\n\nenum UserStatus {\n  ACTIVE\n  DEACTIVATED\n}\n\nenum IdeaStatus {\n  DRAFT\n  UNDER_REVIEW\n  APPROVED\n  REJECTED\n}\n\nenum VoteType {\n  UPVOTE\n  DOWNVOTE\n}\n\nenum PurchaseStatus {\n  PENDING\n  PAID\n  FAILED\n  REFUNDED\n}\n\nmodel Category {\n  id          String   @id @default(cuid())\n  name        String   @unique\n  description String?\n  createdAt   DateTime @default(now())\n  updatedAt   DateTime @updatedAt\n  ideas       Idea[]\n}\n\nmodel Idea {\n  id               String         @id @default(cuid())\n  title            String\n  problemStatement String\n  proposedSolution String\n  description      String\n  isPaid           Boolean        @default(false)\n  price            Decimal?       @db.Decimal(10, 2)\n  status           IdeaStatus     @default(DRAFT)\n  rejectionReason  String?\n  isHighlighted    Boolean        @default(false)\n  submittedAt      DateTime?\n  approvedAt       DateTime?\n  createdAt        DateTime       @default(now())\n  updatedAt        DateTime       @updatedAt\n  authorId         String\n  categoryId       String\n  author           User           @relation(fields: [authorId], references: [id], onDelete: Cascade)\n  category         Category       @relation(fields: [categoryId], references: [id], onDelete: Restrict)\n  media            IdeaMedia[]\n  votes            IdeaVote[]\n  comments         IdeaComment[]\n  purchases        IdeaPurchase[]\n\n  @@index([authorId])\n  @@index([categoryId])\n  @@index([status])\n  @@index([isPaid])\n  @@index([isHighlighted])\n  @@index([createdAt])\n}\n\nmodel IdeaMedia {\n  id        String   @id @default(cuid())\n  ideaId    String\n  url       String\n  altText   String?\n  createdAt DateTime @default(now())\n  idea      Idea     @relation(fields: [ideaId], references: [id], onDelete: Cascade)\n\n  @@index([ideaId])\n}\n\nmodel IdeaVote {\n  id        String   @id @default(cuid())\n  type      VoteType\n  ideaId    String\n  userId    String\n  createdAt DateTime @default(now())\n  updatedAt DateTime @updatedAt\n  idea      Idea     @relation(fields: [ideaId], references: [id], onDelete: Cascade)\n  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)\n\n  @@unique([ideaId, userId])\n  @@index([ideaId])\n  @@index([userId])\n}\n\nmodel IdeaComment {\n  id        String        @id @default(cuid())\n  content   String\n  isDeleted Boolean       @default(false)\n  ideaId    String\n  userId    String\n  parentId  String?\n  createdAt DateTime      @default(now())\n  updatedAt DateTime      @updatedAt\n  idea      Idea          @relation(fields: [ideaId], references: [id], onDelete: Cascade)\n  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)\n  parent    IdeaComment?  @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)\n  replies   IdeaComment[] @relation("CommentReplies")\n\n  @@index([ideaId])\n  @@index([userId])\n  @@index([parentId])\n  @@index([createdAt])\n}\n\nmodel IdeaPurchase {\n  id              String         @id @default(cuid())\n  ideaId          String\n  userId          String\n  amount          Decimal        @db.Decimal(10, 2)\n  currency        String         @default("BDT")\n  status          PurchaseStatus @default(PENDING)\n  paymentProvider String\n  transactionId   String?        @unique\n  purchasedAt     DateTime?\n  createdAt       DateTime       @default(now())\n  updatedAt       DateTime       @updatedAt\n  idea            Idea           @relation(fields: [ideaId], references: [id], onDelete: Cascade)\n  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)\n\n  @@unique([ideaId, userId])\n  @@index([ideaId])\n  @@index([userId])\n  @@index([status])\n}\n\nmodel NewsletterSubscriber {\n  id           String   @id @default(cuid())\n  email        String   @unique\n  subscribed   Boolean  @default(true)\n  subscribedAt DateTime @default(now())\n  createdAt    DateTime @default(now())\n  updatedAt    DateTime @updatedAt\n}\n',
+  "runtimeDataModel": {
+    "models": {},
+    "enums": {},
+    "types": {}
+  },
+  "parameterizationSchema": {
+    "strings": [],
+    "graph": ""
+  }
+};
+config.runtimeDataModel = JSON.parse('{"models":{"User":{"fields":[{"name":"id","kind":"scalar","type":"String"},{"name":"name","kind":"scalar","type":"String"},{"name":"email","kind":"scalar","type":"String"},{"name":"emailVerified","kind":"scalar","type":"Boolean"},{"name":"image","kind":"scalar","type":"String"},{"name":"role","kind":"enum","type":"UserRole"},{"name":"status","kind":"enum","type":"UserStatus"},{"name":"createdAt","kind":"scalar","type":"DateTime"},{"name":"updatedAt","kind":"scalar","type":"DateTime"},{"name":"sessions","kind":"object","type":"Session","relationName":"SessionToUser"},{"name":"accounts","kind":"object","type":"Account","relationName":"AccountToUser"},{"name":"ideas","kind":"object","type":"Idea","relationName":"IdeaToUser"},{"name":"votes","kind":"object","type":"IdeaVote","relationName":"IdeaVoteToUser"},{"name":"comments","kind":"object","type":"IdeaComment","relationName":"IdeaCommentToUser"},{"name":"purchases","kind":"object","type":"IdeaPurchase","relationName":"IdeaPurchaseToUser"}],"dbName":null},"Session":{"fields":[{"name":"id","kind":"scalar","type":"String"},{"name":"expiresAt","kind":"scalar","type":"DateTime"},{"name":"token","kind":"scalar","type":"String"},{"name":"createdAt","kind":"scalar","type":"DateTime"},{"name":"updatedAt","kind":"scalar","type":"DateTime"},{"name":"ipAddress","kind":"scalar","type":"String"},{"name":"userAgent","kind":"scalar","type":"String"},{"name":"userId","kind":"scalar","type":"String"},{"name":"user","kind":"object","type":"User","relationName":"SessionToUser"}],"dbName":null},"Account":{"fields":[{"name":"id","kind":"scalar","type":"String"},{"name":"accountId","kind":"scalar","type":"String"},{"name":"providerId","kind":"scalar","type":"String"},{"name":"userId","kind":"scalar","type":"String"},{"name":"accessToken","kind":"scalar","type":"String"},{"name":"refreshToken","kind":"scalar","type":"String"},{"name":"idToken","kind":"scalar","type":"String"},{"name":"accessTokenExpiresAt","kind":"scalar","type":"DateTime"},{"name":"refreshTokenExpiresAt","kind":"scalar","type":"DateTime"},{"name":"scope","kind":"scalar","type":"String"},{"name":"password","kind":"scalar","type":"String"},{"name":"createdAt","kind":"scalar","type":"DateTime"},{"name":"updatedAt","kind":"scalar","type":"DateTime"},{"name":"user","kind":"object","type":"User","relationName":"AccountToUser"}],"dbName":null},"Verification":{"fields":[{"name":"id","kind":"scalar","type":"String"},{"name":"identifier","kind":"scalar","type":"String"},{"name":"value","kind":"scalar","type":"String"},{"name":"expiresAt","kind":"scalar","type":"DateTime"},{"name":"createdAt","kind":"scalar","type":"DateTime"},{"name":"updatedAt","kind":"scalar","type":"DateTime"}],"dbName":null},"Category":{"fields":[{"name":"id","kind":"scalar","type":"String"},{"name":"name","kind":"scalar","type":"String"},{"name":"description","kind":"scalar","type":"String"},{"name":"createdAt","kind":"scalar","type":"DateTime"},{"name":"updatedAt","kind":"scalar","type":"DateTime"},{"name":"ideas","kind":"object","type":"Idea","relationName":"CategoryToIdea"}],"dbName":null},"Idea":{"fields":[{"name":"id","kind":"scalar","type":"String"},{"name":"title","kind":"scalar","type":"String"},{"name":"problemStatement","kind":"scalar","type":"String"},{"name":"proposedSolution","kind":"scalar","type":"String"},{"name":"description","kind":"scalar","type":"String"},{"name":"isPaid","kind":"scalar","type":"Boolean"},{"name":"price","kind":"scalar","type":"Decimal"},{"name":"status","kind":"enum","type":"IdeaStatus"},{"name":"rejectionReason","kind":"scalar","type":"String"},{"name":"isHighlighted","kind":"scalar","type":"Boolean"},{"name":"submittedAt","kind":"scalar","type":"DateTime"},{"name":"approvedAt","kind":"scalar","type":"DateTime"},{"name":"createdAt","kind":"scalar","type":"DateTime"},{"name":"updatedAt","kind":"scalar","type":"DateTime"},{"name":"authorId","kind":"scalar","type":"String"},{"name":"categoryId","kind":"scalar","type":"String"},{"name":"author","kind":"object","type":"User","relationName":"IdeaToUser"},{"name":"category","kind":"object","type":"Category","relationName":"CategoryToIdea"},{"name":"media","kind":"object","type":"IdeaMedia","relationName":"IdeaToIdeaMedia"},{"name":"votes","kind":"object","type":"IdeaVote","relationName":"IdeaToIdeaVote"},{"name":"comments","kind":"object","type":"IdeaComment","relationName":"IdeaToIdeaComment"},{"name":"purchases","kind":"object","type":"IdeaPurchase","relationName":"IdeaToIdeaPurchase"}],"dbName":null},"IdeaMedia":{"fields":[{"name":"id","kind":"scalar","type":"String"},{"name":"ideaId","kind":"scalar","type":"String"},{"name":"url","kind":"scalar","type":"String"},{"name":"altText","kind":"scalar","type":"String"},{"name":"createdAt","kind":"scalar","type":"DateTime"},{"name":"idea","kind":"object","type":"Idea","relationName":"IdeaToIdeaMedia"}],"dbName":null},"IdeaVote":{"fields":[{"name":"id","kind":"scalar","type":"String"},{"name":"type","kind":"enum","type":"VoteType"},{"name":"ideaId","kind":"scalar","type":"String"},{"name":"userId","kind":"scalar","type":"String"},{"name":"createdAt","kind":"scalar","type":"DateTime"},{"name":"updatedAt","kind":"scalar","type":"DateTime"},{"name":"idea","kind":"object","type":"Idea","relationName":"IdeaToIdeaVote"},{"name":"user","kind":"object","type":"User","relationName":"IdeaVoteToUser"}],"dbName":null},"IdeaComment":{"fields":[{"name":"id","kind":"scalar","type":"String"},{"name":"content","kind":"scalar","type":"String"},{"name":"isDeleted","kind":"scalar","type":"Boolean"},{"name":"ideaId","kind":"scalar","type":"String"},{"name":"userId","kind":"scalar","type":"String"},{"name":"parentId","kind":"scalar","type":"String"},{"name":"createdAt","kind":"scalar","type":"DateTime"},{"name":"updatedAt","kind":"scalar","type":"DateTime"},{"name":"idea","kind":"object","type":"Idea","relationName":"IdeaToIdeaComment"},{"name":"user","kind":"object","type":"User","relationName":"IdeaCommentToUser"},{"name":"parent","kind":"object","type":"IdeaComment","relationName":"CommentReplies"},{"name":"replies","kind":"object","type":"IdeaComment","relationName":"CommentReplies"}],"dbName":null},"IdeaPurchase":{"fields":[{"name":"id","kind":"scalar","type":"String"},{"name":"ideaId","kind":"scalar","type":"String"},{"name":"userId","kind":"scalar","type":"String"},{"name":"amount","kind":"scalar","type":"Decimal"},{"name":"currency","kind":"scalar","type":"String"},{"name":"status","kind":"enum","type":"PurchaseStatus"},{"name":"paymentProvider","kind":"scalar","type":"String"},{"name":"transactionId","kind":"scalar","type":"String"},{"name":"purchasedAt","kind":"scalar","type":"DateTime"},{"name":"createdAt","kind":"scalar","type":"DateTime"},{"name":"updatedAt","kind":"scalar","type":"DateTime"},{"name":"idea","kind":"object","type":"Idea","relationName":"IdeaToIdeaPurchase"},{"name":"user","kind":"object","type":"User","relationName":"IdeaPurchaseToUser"}],"dbName":null},"NewsletterSubscriber":{"fields":[{"name":"id","kind":"scalar","type":"String"},{"name":"email","kind":"scalar","type":"String"},{"name":"subscribed","kind":"scalar","type":"Boolean"},{"name":"subscribedAt","kind":"scalar","type":"DateTime"},{"name":"createdAt","kind":"scalar","type":"DateTime"},{"name":"updatedAt","kind":"scalar","type":"DateTime"}],"dbName":null}},"enums":{},"types":{}}');
+config.parameterizationSchema = {
+  strings: JSON.parse('["where","orderBy","cursor","user","sessions","accounts","author","ideas","_count","category","idea","media","votes","parent","replies","comments","purchases","User.findUnique","User.findUniqueOrThrow","User.findFirst","User.findFirstOrThrow","User.findMany","data","User.createOne","User.createMany","User.createManyAndReturn","User.updateOne","User.updateMany","User.updateManyAndReturn","create","update","User.upsertOne","User.deleteOne","User.deleteMany","having","_min","_max","User.groupBy","User.aggregate","Session.findUnique","Session.findUniqueOrThrow","Session.findFirst","Session.findFirstOrThrow","Session.findMany","Session.createOne","Session.createMany","Session.createManyAndReturn","Session.updateOne","Session.updateMany","Session.updateManyAndReturn","Session.upsertOne","Session.deleteOne","Session.deleteMany","Session.groupBy","Session.aggregate","Account.findUnique","Account.findUniqueOrThrow","Account.findFirst","Account.findFirstOrThrow","Account.findMany","Account.createOne","Account.createMany","Account.createManyAndReturn","Account.updateOne","Account.updateMany","Account.updateManyAndReturn","Account.upsertOne","Account.deleteOne","Account.deleteMany","Account.groupBy","Account.aggregate","Verification.findUnique","Verification.findUniqueOrThrow","Verification.findFirst","Verification.findFirstOrThrow","Verification.findMany","Verification.createOne","Verification.createMany","Verification.createManyAndReturn","Verification.updateOne","Verification.updateMany","Verification.updateManyAndReturn","Verification.upsertOne","Verification.deleteOne","Verification.deleteMany","Verification.groupBy","Verification.aggregate","Category.findUnique","Category.findUniqueOrThrow","Category.findFirst","Category.findFirstOrThrow","Category.findMany","Category.createOne","Category.createMany","Category.createManyAndReturn","Category.updateOne","Category.updateMany","Category.updateManyAndReturn","Category.upsertOne","Category.deleteOne","Category.deleteMany","Category.groupBy","Category.aggregate","Idea.findUnique","Idea.findUniqueOrThrow","Idea.findFirst","Idea.findFirstOrThrow","Idea.findMany","Idea.createOne","Idea.createMany","Idea.createManyAndReturn","Idea.updateOne","Idea.updateMany","Idea.updateManyAndReturn","Idea.upsertOne","Idea.deleteOne","Idea.deleteMany","_avg","_sum","Idea.groupBy","Idea.aggregate","IdeaMedia.findUnique","IdeaMedia.findUniqueOrThrow","IdeaMedia.findFirst","IdeaMedia.findFirstOrThrow","IdeaMedia.findMany","IdeaMedia.createOne","IdeaMedia.createMany","IdeaMedia.createManyAndReturn","IdeaMedia.updateOne","IdeaMedia.updateMany","IdeaMedia.updateManyAndReturn","IdeaMedia.upsertOne","IdeaMedia.deleteOne","IdeaMedia.deleteMany","IdeaMedia.groupBy","IdeaMedia.aggregate","IdeaVote.findUnique","IdeaVote.findUniqueOrThrow","IdeaVote.findFirst","IdeaVote.findFirstOrThrow","IdeaVote.findMany","IdeaVote.createOne","IdeaVote.createMany","IdeaVote.createManyAndReturn","IdeaVote.updateOne","IdeaVote.updateMany","IdeaVote.updateManyAndReturn","IdeaVote.upsertOne","IdeaVote.deleteOne","IdeaVote.deleteMany","IdeaVote.groupBy","IdeaVote.aggregate","IdeaComment.findUnique","IdeaComment.findUniqueOrThrow","IdeaComment.findFirst","IdeaComment.findFirstOrThrow","IdeaComment.findMany","IdeaComment.createOne","IdeaComment.createMany","IdeaComment.createManyAndReturn","IdeaComment.updateOne","IdeaComment.updateMany","IdeaComment.updateManyAndReturn","IdeaComment.upsertOne","IdeaComment.deleteOne","IdeaComment.deleteMany","IdeaComment.groupBy","IdeaComment.aggregate","IdeaPurchase.findUnique","IdeaPurchase.findUniqueOrThrow","IdeaPurchase.findFirst","IdeaPurchase.findFirstOrThrow","IdeaPurchase.findMany","IdeaPurchase.createOne","IdeaPurchase.createMany","IdeaPurchase.createManyAndReturn","IdeaPurchase.updateOne","IdeaPurchase.updateMany","IdeaPurchase.updateManyAndReturn","IdeaPurchase.upsertOne","IdeaPurchase.deleteOne","IdeaPurchase.deleteMany","IdeaPurchase.groupBy","IdeaPurchase.aggregate","NewsletterSubscriber.findUnique","NewsletterSubscriber.findUniqueOrThrow","NewsletterSubscriber.findFirst","NewsletterSubscriber.findFirstOrThrow","NewsletterSubscriber.findMany","NewsletterSubscriber.createOne","NewsletterSubscriber.createMany","NewsletterSubscriber.createManyAndReturn","NewsletterSubscriber.updateOne","NewsletterSubscriber.updateMany","NewsletterSubscriber.updateManyAndReturn","NewsletterSubscriber.upsertOne","NewsletterSubscriber.deleteOne","NewsletterSubscriber.deleteMany","NewsletterSubscriber.groupBy","NewsletterSubscriber.aggregate","AND","OR","NOT","id","email","subscribed","subscribedAt","createdAt","updatedAt","equals","in","notIn","lt","lte","gt","gte","not","contains","startsWith","endsWith","ideaId","userId","amount","currency","PurchaseStatus","status","paymentProvider","transactionId","purchasedAt","content","isDeleted","parentId","VoteType","type","url","altText","title","problemStatement","proposedSolution","description","isPaid","price","IdeaStatus","rejectionReason","isHighlighted","submittedAt","approvedAt","authorId","categoryId","name","every","some","none","identifier","value","expiresAt","accountId","providerId","accessToken","refreshToken","idToken","accessTokenExpiresAt","refreshTokenExpiresAt","scope","password","token","ipAddress","userAgent","emailVerified","image","UserRole","role","UserStatus","ideaId_userId","providerId_accountId","is","isNot","connectOrCreate","upsert","createMany","set","disconnect","delete","connect","updateMany","deleteMany","increment","decrement","multiply","divide"]'),
+  graph: "ugVhsAESBAAA6wIAIAUAAOwCACAHAADcAgAgDAAA7QIAIA8AAO4CACAQAADvAgAgyQEAAOgCADDKAQAAMgAQywEAAOgCADDMAQEAAAABzQEBAAAAAdABQAC9AgAh0QFAAL0CACHiAQAA6gKSAiL6AQEAuwIAIY0CIAC8AgAhjgIBANsCACGQAgAA6QKQAiIBAAAAAQAgDAMAAPYCACDJAQAAhAMAMMoBAAADABDLAQAAhAMAMMwBAQC7AgAh0AFAAL0CACHRAUAAvQIAId4BAQC7AgAhgAJAAL0CACGKAgEAuwIAIYsCAQDbAgAhjAIBANsCACEDAwAA7wQAIIsCAACLAwAgjAIAAIsDACAMAwAA9gIAIMkBAACEAwAwygEAAAMAEMsBAACEAwAwzAEBAAAAAdABQAC9AgAh0QFAAL0CACHeAQEAuwIAIYACQAC9AgAhigIBAAAAAYsCAQDbAgAhjAIBANsCACEDAAAAAwAgAQAABAAwAgAABQAgEQMAAPYCACDJAQAAgwMAMMoBAAAHABDLAQAAgwMAMMwBAQC7AgAh0AFAAL0CACHRAUAAvQIAId4BAQC7AgAhgQIBALsCACGCAgEAuwIAIYMCAQDbAgAhhAIBANsCACGFAgEA2wIAIYYCQAD0AgAhhwJAAPQCACGIAgEA2wIAIYkCAQDbAgAhCAMAAO8EACCDAgAAiwMAIIQCAACLAwAghQIAAIsDACCGAgAAiwMAIIcCAACLAwAgiAIAAIsDACCJAgAAiwMAIBIDAAD2AgAgyQEAAIMDADDKAQAABwAQywEAAIMDADDMAQEAAAAB0AFAAL0CACHRAUAAvQIAId4BAQC7AgAhgQIBALsCACGCAgEAuwIAIYMCAQDbAgAhhAIBANsCACGFAgEA2wIAIYYCQAD0AgAhhwJAAPQCACGIAgEA2wIAIYkCAQDbAgAhkwIAAIIDACADAAAABwAgAQAACAAwAgAACQAgGQYAAPYCACAJAACAAwAgCwAAgQMAIAwAAO0CACAPAADuAgAgEAAA7wIAIMkBAAD9AgAwygEAAAsAEMsBAAD9AgAwzAEBALsCACHQAUAAvQIAIdEBQAC9AgAh4gEAAP8C9AEi7QEBALsCACHuAQEAuwIAIe8BAQC7AgAh8AEBALsCACHxASAAvAIAIfIBEAD-AgAh9AEBANsCACH1ASAAvAIAIfYBQAD0AgAh9wFAAPQCACH4AQEAuwIAIfkBAQC7AgAhCgYAAO8EACAJAADxBAAgCwAA8gQAIAwAAOsEACAPAADsBAAgEAAA7QQAIPIBAACLAwAg9AEAAIsDACD2AQAAiwMAIPcBAACLAwAgGQYAAPYCACAJAACAAwAgCwAAgQMAIAwAAO0CACAPAADuAgAgEAAA7wIAIMkBAAD9AgAwygEAAAsAEMsBAAD9AgAwzAEBAAAAAdABQAC9AgAh0QFAAL0CACHiAQAA_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_wEBALsCACGAAkAAvQIAIQADAAAAdwAgAQAAeAAwAgAAdAAgAwAAAHcAIAEAAHgAMAIAAHQAIAMAAAB3ACABAAB4ADACAAB0ACAGzAEBAAAAAdABQAAAAAHRAUAAAAAB_gEBAAAAAf8BAQAAAAGAAkAAAAABARYAAHwAIAbMAQEAAAAB0AFAAAAAAdEBQAAAAAH-AQEAAAAB_wEBAAAAAYACQAAAAAEBFgAAfgAwARYAAH4AMAbMAQEAiAMAIdABQACKAwAh0QFAAIoDACH-AQEAiAMAIf8BAQCIAwAhgAJAAIoDACECAAAAdAAgFgAAgQEAIAbMAQEAiAMAIdABQACKAwAh0QFAAIoDACH-AQEAiAMAIf8BAQCIAwAhgAJAAIoDACECAAAAdwAgFgAAgwEAIAIAAAB3ACAWAACDAQAgAwAAAHQAIB0AAHwAIB4AAIEBACABAAAAdAAgAQAAAHcAIAMIAACPBAAgIwAAkQQAICQAAJAEACAJyQEAAN0CADDKAQAAigEAEMsBAADdAgAwzAEBALACACHQAUAAsgIAIdEBQACyAgAh_gEBALACACH_AQEAsAIAIYACQACyAgAhAwAAAHcAIAEAAIkBADAiAACKAQAgAwAAAHcAIAEAAHgAMAIAAHQAIAkHAADcAgAgyQEAANoCADDKAQAAkAEAEMsBAADaAgAwzAEBAAAAAdABQAC9AgAh0QFAAL0CACHwAQEA2wIAIfoBAQAAAAEBAAAAjQEAIAEAAACNAQAgCQcAANwCACDJAQAA2gIAMMoBAACQAQAQywEAANoCADDMAQEAuwIAIdABQAC9AgAh0QFAAL0CACHwAQEA2wIAIfoBAQC7AgAhAgcAAI4EACDwAQAAiwMAIAMAAACQAQAgAQAAkQEAMAIAAI0BACADAAAAkAEAIAEAAJEBADACAACNAQAgAwAAAJABACABAACRAQAwAgAAjQEAIAYHAACNBAAgzAEBAAAAAdABQAAAAAHRAUAAAAAB8AEBAAAAAfoBAQAAAAEBFgAAlQEAIAXMAQEAAAAB0AFAAAAAAdEBQAAAAAHwAQEAAAAB-gEBAAAAAQEWAACXAQAwARYAAJcBADAGBwAAgAQAIMwBAQCIAwAh0AFAAIoDACHRAUAAigMAIfABAQCTAwAh-gEBAIgDACECAAAAjQEAIBYAAJoBACAFzAEBAIgDACHQAUAAigMAIdEBQACKAwAh8AEBAJMDACH6AQEAiAMAIQIAAACQAQAgFgAAnAEAIAIAAACQAQAgFgAAnAEAIAMAAACNAQAgHQAAlQEAIB4AAJoBACABAAAAjQEAIAEAAACQAQAgBAgAAP0DACAjAAD_AwAgJAAA_gMAIPABAACLAwAgCMkBAADZAgAwygEAAKMBABDLAQAA2QIAMMwBAQCwAgAh0AFAALICACHRAUAAsgIAIfABAQDBAgAh-gEBALACACEDAAAAkAEAIAEAAKIBADAiAACjAQAgAwAAAJABACABAACRAQAwAgAAjQEAIAEAAAANACABAAAADQAgAwAAAAsAIAEAAAwAMAIAAA0AIAMAAAALACABAAAMADACAAANACADAAAACwAgAQAADAAwAgAADQAgFgYAAPcDACAJAAD4AwAgCwAA-QMAIAwAAPoDACAPAAD7AwAgEAAA_AMAIMwBAQAAAAHQAUAAAAAB0QFAAAAAAeIBAAAA9AEC7QEBAAAAAe4BAQAAAAHvAQEAAAAB8AEBAAAAAfEBIAAAAAHyARAAAAAB9AEBAAAAAfUBIAAAAAH2AUAAAAAB9wFAAAAAAfgBAQAAAAH5AQEAAAABARYAAKsBACAQzAEBAAAAAdABQAAAAAHRAUAAAAAB4gEAAAD0AQLtAQEAAAAB7gEBAAAAAe8BAQAAAAHwAQEAAAAB8QEgAAAAAfIBEAAAAAH0AQEAAAAB9QEgAAAAAfYBQAAAAAH3AUAAAAAB-AEBAAAAAfkBAQAAAAEBFgAArQEAMAEWAACtAQAwFgYAAMQDACAJAADFAwAgCwAAxgMAIAwAAMcDACAPAADIAwAgEAAAyQMAIMwBAQCIAwAh0AFAAIoDACHRAUAAigMAIeIBAADDA_QBIu0BAQCIAwAh7gEBAIgDACHvAQEAiAMAIfABAQCIAwAh8QEgAIkDACHyARAAwgMAIfQBAQCTAwAh9QEgAIkDACH2AUAAlAMAIfcBQACUAwAh-AEBAIgDACH5AQEAiAMAIQIAAAANACAWAACwAQAgEMwBAQCIAwAh0AFAAIoDACHRAUAAigMAIeIBAADDA_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_QEAEMsBAADMAgAwzAEBALACACHQAUAAsgIAIdEBQACyAgAh3QEBALACACHeAQEAsAIAIeYBAQCwAgAh5wEgALECACHoAQEAwQIAIQMAAAAZACABAAD8AQAwIgAA_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_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_sBAAALACD8AQAACwAg_QEAAAsAIAnJAQAA3QIAMMoBAACKAQAQywEAAN0CADDMAQEAsAIAIdABQACyAgAh0QFAALICACH-AQEAsAIAIf8BAQCwAgAhgAJAALICACEJyQEAAN4CADDKAQAAdwAQywEAAN4CADDMAQEAuwIAIdABQAC9AgAh0QFAAL0CACH-AQEAuwIAIf8BAQC7AgAhgAJAAL0CACEQyQEAAN8CADDKAQAAcQAQywEAAN8CADDMAQEAsAIAIdABQACyAgAh0QFAALICACHeAQEAsAIAIYECAQCwAgAhggIBALACACGDAgEAwQIAIYQCAQDBAgAhhQIBAMECACGGAkAAwgIAIYcCQADCAgAhiAIBAMECACGJAgEAwQIAIQvJAQAA4AIAMMoBAABbABDLAQAA4AIAMMwBAQCwAgAh0AFAALICACHRAUAAsgIAId4BAQCwAgAhgAJAALICACGKAgEAsAIAIYsCAQDBAgAhjAIBAMECACEMyQEAAOECADDKAQAARQAQywEAAOECADDMAQEAsAIAIc0BAQCwAgAh0AFAALICACHRAUAAsgIAIeIBAADjApICIvoBAQCwAgAhjQIgALECACGOAgEAwQIAIZACAADiApACIgcIAAC0AgAgIwAA5wIAICQAAOcCACDSAQAAAJACAtMBAAAAkAII1AEAAACQAgjZAQAA5gKQAiIHCAAAtAIAICMAAOUCACAkAADlAgAg0gEAAACSAgLTAQAAAJICCNQBAAAAkgII2QEAAOQCkgIiBwgAALQCACAjAADlAgAgJAAA5QIAINIBAAAAkgIC0wEAAACSAgjUAQAAAJICCNkBAADkApICIgTSAQAAAJICAtMBAAAAkgII1AEAAACSAgjZAQAA5QKSAiIHCAAAtAIAICMAAOcCACAkAADnAgAg0gEAAACQAgLTAQAAAJACCNQBAAAAkAII2QEAAOYCkAIiBNIBAAAAkAIC0wEAAACQAgjUAQAAAJACCNkBAADnApACIhIEAADrAgAgBQAA7AIAIAcAANwCACAMAADtAgAgDwAA7gIAIBAAAO8CACDJAQAA6AIAMMoBAAAyABDLAQAA6AIAMMwBAQC7AgAhzQEBALsCACHQAUAAvQIAIdEBQAC9AgAh4gEAAOoCkgIi-gEBALsCACGNAiAAvAIAIY4CAQDbAgAhkAIAAOkCkAIiBNIBAAAAkAIC0wEAAACQAgjUAQAAAJACCNkBAADnApACIgTSAQAAAJICAtMBAAAAkgII1AEAAACSAgjZAQAA5QKSAiID-wEAAAMAIPwBAAADACD9AQAAAwAgA_sBAAAHACD8AQAABwAg_QEAAAcAIAP7AQAAFQAg_AEAABUAIP0BAAAVACAD-wEAABkAIPwBAAAZACD9AQAAGQAgA_sBAAAgACD8AQAAIAAg_QEAACAAIALdAQEAAAAB3gEBAAAAARADAAD2AgAgCgAA9QIAIMkBAADxAgAwygEAACAAEMsBAADxAgAwzAEBALsCACHQAUAAvQIAIdEBQAC9AgAh3QEBALsCACHeAQEAuwIAId8BEADyAgAh4AEBALsCACHiAQAA8wLiASLjAQEAuwIAIeQBAQDbAgAh5QFAAPQCACEI0gEQAAAAAdMBEAAAAATUARAAAAAE1QEQAAAAAdYBEAAAAAHXARAAAAAB2AEQAAAAAdkBEADLAgAhBNIBAAAA4gEC0wEAAADiAQjUAQAAAOIBCNkBAADJAuIBIgjSAUAAAAAB0wFAAAAABdQBQAAAAAXVAUAAAAAB1gFAAAAAAdcBQAAAAAHYAUAAAAAB2QFAAMUCACEbBgAA9gIAIAkAAIADACALAACBAwAgDAAA7QIAIA8AAO4CACAQAADvAgAgyQEAAP0CADDKAQAACwAQywEAAP0CADDMAQEAuwIAIdABQAC9AgAh0QFAAL0CACHiAQAA_wL0ASLtAQEAuwIAIe4BAQC7AgAh7wEBALsCACHwAQEAuwIAIfEBIAC8AgAh8gEQAP4CACH0AQEA2wIAIfUBIAC8AgAh9gFAAPQCACH3AUAA9AIAIfgBAQC7AgAh-QEBALsCACGUAgAACwAglQIAAAsAIBQEAADrAgAgBQAA7AIAIAcAANwCACAMAADtAgAgDwAA7gIAIBAAAO8CACDJAQAA6AIAMMoBAAAyABDLAQAA6AIAMMwBAQC7AgAhzQEBALsCACHQAUAAvQIAIdEBQAC9AgAh4gEAAOoCkgIi-gEBALsCACGNAiAAvAIAIY4CAQDbAgAhkAIAAOkCkAIilAIAADIAIJUCAAAyACAPAwAA9gIAIAoAAPUCACANAAD4AgAgDgAA7gIAIMkBAAD3AgAwygEAABkAEMsBAAD3AgAwzAEBALsCACHQAUAAvQIAIdEBQAC9AgAh3QEBALsCACHeAQEAuwIAIeYBAQC7AgAh5wEgALwCACHoAQEA2wIAIREDAAD2AgAgCgAA9QIAIA0AAPgCACAOAADuAgAgyQEAAPcCADDKAQAAGQAQywEAAPcCADDMAQEAuwIAIdABQAC9AgAh0QFAAL0CACHdAQEAuwIAId4BAQC7AgAh5gEBALsCACHnASAAvAIAIegBAQDbAgAhlAIAABkAIJUCAAAZACAC3QEBAAAAAd4BAQAAAAELAwAA9gIAIAoAAPUCACDJAQAA-gIAMMoBAAAVABDLAQAA-gIAMMwBAQC7AgAh0AFAAL0CACHRAUAAvQIAId0BAQC7AgAh3gEBALsCACHqAQAA-wLqASIE0gEAAADqAQLTAQAAAOoBCNQBAAAA6gEI2QEAANAC6gEiCQoAAPUCACDJAQAA_AIAMMoBAAARABDLAQAA_AIAMMwBAQC7AgAh0AFAAL0CACHdAQEAuwIAIesBAQC7AgAh7AEBANsCACEZBgAA9gIAIAkAAIADACALAACBAwAgDAAA7QIAIA8AAO4CACAQAADvAgAgyQEAAP0CADDKAQAACwAQywEAAP0CADDMAQEAuwIAIdABQAC9AgAh0QFAAL0CACHiAQAA_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-gIAMMoBAAAVABDLAQAA-gIAMMwBAQAAAAHQAUAAvQIAIdEBQAC9AgAh3QEBALsCACHeAQEAuwIAIeoBAAD7AuoBIpICAAD5AgAgAgAAABcAIBYAAOkDACACAAAA5wMAIBYAAOgDACAJyQEAAOYDADDKAQAA5wMAEMsBAADmAwAwzAEBALsCACHQAUAAvQIAIdEBQAC9AgAh3QEBALsCACHeAQEAuwIAIeoBAAD7AuoBIgnJAQAA5gMAMMoBAADnAwAQywEAAOYDADDMAQEAuwIAIdABQAC9AgAh0QFAAL0CACHdAQEAuwIAId4BAQC7AgAh6gEAAPsC6gEiBcwBAQCIAwAh0AFAAIoDACHRAUAAigMAId4BAQCIAwAh6gEAALMD6gEiBgMAALUDACDMAQEAiAMAIdABQACKAwAh0QFAAIoDACHeAQEAiAMAIeoBAACzA-oBIgYDAAC3AwAgzAEBAAAAAdABQAAAAAHRAUAAAAAB3gEBAAAAAeoBAAAA6gECBMwBAQAAAAHQAUAAAAAB6wEBAAAAAewBAQAAAAECAAAAEwAgHQAA9gMAIAMAAAATACAdAAD2AwAgHgAA9QMAIAEWAACIBQAwCQoAAPUCACDJAQAA_AIAMMoBAAARABDLAQAA_AIAMMwBAQAAAAHQAUAAvQIAId0BAQC7AgAh6wEBALsCACHsAQEA2wIAIQIAAAATACAWAAD1AwAgAgAAAPMDACAWAAD0AwAgCMkBAADyAwAwygEAAPMDABDLAQAA8gMAMMwBAQC7AgAh0AFAAL0CACHdAQEAuwIAIesBAQC7AgAh7AEBANsCACEIyQEAAPIDADDKAQAA8wMAEMsBAADyAwAwzAEBALsCACHQAUAAvQIAId0BAQC7AgAh6wEBALsCACHsAQEA2wIAIQTMAQEAiAMAIdABQACKAwAh6wEBAIgDACHsAQEAkwMAIQTMAQEAiAMAIdABQACKAwAh6wEBAIgDACHsAQEAkwMAIQTMAQEAAAAB0AFAAAAAAesBAQAAAAHsAQEAAAABAx0AAIYFACCWAgAAhwUAIJwCAAABACADHQAAhAUAIJYCAACFBQAgnAIAAI0BACAEHQAA6wMAMJYCAADsAwAwmAIAAO4DACCcAgAA7wMAMAQdAADfAwAwlgIAAOADADCYAgAA4gMAIJwCAADjAwAwBB0AANYDADCWAgAA1wMAMJgCAADZAwAgnAIAAKQDADAEHQAAygMAMJYCAADLAwAwmAIAAM0DACCcAgAAzgMAMAAAAAsdAACBBAAwHgAAhgQAMJYCAACCBAAwlwIAAIMEADCYAgAAhAQAIJkCAACFBAAwmgIAAIUEADCbAgAAhQQAMJwCAACFBAAwnQIAAIcEADCeAgAAiAQAMBQGAAD3AwAgCwAA-QMAIAwAAPoDACAPAAD7AwAgEAAA_AMAIMwBAQAAAAHQAUAAAAAB0QFAAAAAAeIBAAAA9AEC7QEBAAAAAe4BAQAAAAHvAQEAAAAB8AEBAAAAAfEBIAAAAAHyARAAAAAB9AEBAAAAAfUBIAAAAAH2AUAAAAAB9wFAAAAAAfgBAQAAAAECAAAADQAgHQAAjAQAIAMAAAANACAdAACMBAAgHgAAiwQAIAEWAACDBQAwGQYAAPYCACAJAACAAwAgCwAAgQMAIAwAAO0CACAPAADuAgAgEAAA7wIAIMkBAAD9AgAwygEAAAsAEMsBAAD9AgAwzAEBAAAAAdABQAC9AgAh0QFAAL0CACHiAQAA_wL0ASLtAQEAuwIAIe4BAQC7AgAh7wEBALsCACHwAQEAuwIAIfEBIAC8AgAh8gEQAP4CACH0AQEA2wIAIfUBIAC8AgAh9gFAAPQCACH3AUAA9AIAIfgBAQC7AgAh-QEBALsCACECAAAADQAgFgAAiwQAIAIAAACJBAAgFgAAigQAIBPJAQAAiAQAMMoBAACJBAAQywEAAIgEADDMAQEAuwIAIdABQAC9AgAh0QFAAL0CACHiAQAA_wL0ASLtAQEAuwIAIe4BAQC7AgAh7wEBALsCACHwAQEAuwIAIfEBIAC8AgAh8gEQAP4CACH0AQEA2wIAIfUBIAC8AgAh9gFAAPQCACH3AUAA9AIAIfgBAQC7AgAh-QEBALsCACETyQEAAIgEADDKAQAAiQQAEMsBAACIBAAwzAEBALsCACHQAUAAvQIAIdEBQAC9AgAh4gEAAP8C9AEi7QEBALsCACHuAQEAuwIAIe8BAQC7AgAh8AEBALsCACHxASAAvAIAIfIBEAD-AgAh9AEBANsCACH1ASAAvAIAIfYBQAD0AgAh9wFAAPQCACH4AQEAuwIAIfkBAQC7AgAhD8wBAQCIAwAh0AFAAIoDACHRAUAAigMAIeIBAADDA_QBIu0BAQCIAwAh7gEBAIgDACHvAQEAiAMAIfABAQCIAwAh8QEgAIkDACHyARAAwgMAIfQBAQCTAwAh9QEgAIkDACH2AUAAlAMAIfcBQACUAwAh-AEBAIgDACEUBgAAxAMAIAsAAMYDACAMAADHAwAgDwAAyAMAIBAAAMkDACDMAQEAiAMAIdABQACKAwAh0QFAAIoDACHiAQAAwwP0ASLtAQEAiAMAIe4BAQCIAwAh7wEBAIgDACHwAQEAiAMAIfEBIACJAwAh8gEQAMIDACH0AQEAkwMAIfUBIACJAwAh9gFAAJQDACH3AUAAlAMAIfgBAQCIAwAhFAYAAPcDACALAAD5AwAgDAAA-gMAIA8AAPsDACAQAAD8AwAgzAEBAAAAAdABQAAAAAHRAUAAAAAB4gEAAAD0AQLtAQEAAAAB7gEBAAAAAe8BAQAAAAHwAQEAAAAB8QEgAAAAAfIBEAAAAAH0AQEAAAAB9QEgAAAAAfYBQAAAAAH3AUAAAAAB-AEBAAAAAQQdAACBBAAwlgIAAIIEADCYAgAAhAQAIJwCAACFBAAwAAAAAAAAAAUdAAD-BAAgHgAAgQUAIJYCAAD_BAAglwIAAIAFACCcAgAAAQAgAx0AAP4EACCWAgAA_wQAIJwCAAABACAAAAAFHQAA-QQAIB4AAPwEACCWAgAA-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-AMAIAsAAPkDACAMAAD6AwAgDwAA-wMAIBAAAPwDACDMAQEAAAAB0AFAAAAAAdEBQAAAAAHiAQAAAPQBAu0BAQAAAAHuAQEAAAAB7wEBAAAAAfABAQAAAAHxASAAAAAB8gEQAAAAAfQBAQAAAAH1ASAAAAAB9gFAAAAAAfcBQAAAAAH5AQEAAAABAgAAAA0AIB0AAMoEACADAAAADQAgHQAAygQAIB4AAMkEACABFgAA9QQAMAIAAAANACAWAADJBAAgAgAAAIkEACAWAADIBAAgD8wBAQCIAwAh0AFAAIoDACHRAUAAigMAIeIBAADDA_QBIu0BAQCIAwAh7gEBAIgDACHvAQEAiAMAIfABAQCIAwAh8QEgAIkDACHyARAAwgMAIfQBAQCTAwAh9QEgAIkDACH2AUAAlAMAIfcBQACUAwAh-QEBAIgDACEUCQAAxQMAIAsAAMYDACAMAADHAwAgDwAAyAMAIBAAAMkDACDMAQEAiAMAIdABQACKAwAh0QFAAIoDACHiAQAAwwP0ASLtAQEAiAMAIe4BAQCIAwAh7wEBAIgDACHwAQEAiAMAIfEBIACJAwAh8gEQAMIDACH0AQEAkwMAIfUBIACJAwAh9gFAAJQDACH3AUAAlAMAIfkBAQCIAwAhFAkAAPgDACALAAD5AwAgDAAA-gMAIA8AAPsDACAQAAD8AwAgzAEBAAAAAdABQAAAAAHRAUAAAAAB4gEAAAD0AQLtAQEAAAAB7gEBAAAAAe8BAQAAAAHwAQEAAAAB8QEgAAAAAfIBEAAAAAH0AQEAAAAB9QEgAAAAAfYBQAAAAAH3AUAAAAAB-QEBAAAAAQzMAQEAAAAB0AFAAAAAAdEBQAAAAAGBAgEAAAABggIBAAAAAYMCAQAAAAGEAgEAAAABhQIBAAAAAYYCQAAAAAGHAkAAAAABiAIBAAAAAYkCAQAAAAECAAAACQAgHQAA1gQAIAMAAAAJACAdAADWBAAgHgAA1QQAIAEWAAD0BAAwEgMAAPYCACDJAQAAgwMAMMoBAAAHABDLAQAAgwMAMMwBAQAAAAHQAUAAvQIAIdEBQAC9AgAh3gEBALsCACGBAgEAuwIAIYICAQC7AgAhgwIBANsCACGEAgEA2wIAIYUCAQDbAgAhhgJAAPQCACGHAkAA9AIAIYgCAQDbAgAhiQIBANsCACGTAgAAggMAIAIAAAAJACAWAADVBAAgAgAAANMEACAWAADUBAAgEMkBAADSBAAwygEAANMEABDLAQAA0gQAMMwBAQC7AgAh0AFAAL0CACHRAUAAvQIAId4BAQC7AgAhgQIBALsCACGCAgEAuwIAIYMCAQDbAgAhhAIBANsCACGFAgEA2wIAIYYCQAD0AgAhhwJAAPQCACGIAgEA2wIAIYkCAQDbAgAhEMkBAADSBAAwygEAANMEABDLAQAA0gQAMMwBAQC7AgAh0AFAAL0CACHRAUAAvQIAId4BAQC7AgAhgQIBALsCACGCAgEAuwIAIYMCAQDbAgAhhAIBANsCACGFAgEA2wIAIYYCQAD0AgAhhwJAAPQCACGIAgEA2wIAIYkCAQDbAgAhDMwBAQCIAwAh0AFAAIoDACHRAUAAigMAIYECAQCIAwAhggIBAIgDACGDAgEAkwMAIYQCAQCTAwAhhQIBAJMDACGGAkAAlAMAIYcCQACUAwAhiAIBAJMDACGJAgEAkwMAIQzMAQEAiAMAIdABQACKAwAh0QFAAIoDACGBAgEAiAMAIYICAQCIAwAhgwIBAJMDACGEAgEAkwMAIYUCAQCTAwAhhgJAAJQDACGHAkAAlAMAIYgCAQCTAwAhiQIBAJMDACEMzAEBAAAAAdABQAAAAAHRAUAAAAABgQIBAAAAAYICAQAAAAGDAgEAAAABhAIBAAAAAYUCAQAAAAGGAkAAAAABhwJAAAAAAYgCAQAAAAGJAgEAAAABB8wBAQAAAAHQAUAAAAAB0QFAAAAAAYACQAAAAAGKAgEAAAABiwIBAAAAAYwCAQAAAAECAAAABQAgHQAA4gQAIAMAAAAFACAdAADiBAAgHgAA4QQAIAEWAADzBAAwDAMAAPYCACDJAQAAhAMAMMoBAAADABDLAQAAhAMAMMwBAQAAAAHQAUAAvQIAIdEBQAC9AgAh3gEBALsCACGAAkAAvQIAIYoCAQAAAAGLAgEA2wIAIYwCAQDbAgAhAgAAAAUAIBYAAOEEACACAAAA3wQAIBYAAOAEACALyQEAAN4EADDKAQAA3wQAEMsBAADeBAAwzAEBALsCACHQAUAAvQIAIdEBQAC9AgAh3gEBALsCACGAAkAAvQIAIYoCAQC7AgAhiwIBANsCACGMAgEA2wIAIQvJAQAA3gQAMMoBAADfBAAQywEAAN4EADDMAQEAuwIAIdABQAC9AgAh0QFAAL0CACHeAQEAuwIAIYACQAC9AgAhigIBALsCACGLAgEA2wIAIYwCAQDbAgAhB8wBAQCIAwAh0AFAAIoDACHRAUAAigMAIYACQACKAwAhigIBAIgDACGLAgEAkwMAIYwCAQCTAwAhB8wBAQCIAwAh0AFAAIoDACHRAUAAigMAIYACQACKAwAhigIBAIgDACGLAgEAkwMAIYwCAQCTAwAhB8wBAQAAAAHQAUAAAAAB0QFAAAAAAYACQAAAAAGKAgEAAAABiwIBAAAAAYwCAQAAAAEEHQAA1wQAMJYCAADYBAAwmAIAANoEACCcAgAA2wQAMAQdAADLBAAwlgIAAMwEADCYAgAAzgQAIJwCAADPBAAwBB0AAMIEADCWAgAAwwQAMJgCAADFBAAgnAIAAIUEADAEHQAAuQQAMJYCAAC6BAAwmAIAALwEACCcAgAA4wMAMAQdAACwBAAwlgIAALEEADCYAgAAswQAIJwCAACkAwAwBB0AAKcEADCWAgAAqAQAMJgCAACqBAAgnAIAAM4DADAAAAAAAAoGAADvBAAgCQAA8QQAIAsAAPIEACAMAADrBAAgDwAA7AQAIBAAAO0EACDyAQAAiwMAIPQBAACLAwAg9gEAAIsDACD3AQAAiwMAIAcEAADpBAAgBQAA6gQAIAcAAI4EACAMAADrBAAgDwAA7AQAIBAAAO0EACCOAgAAiwMAIAUDAADvBAAgCgAA7gQAIA0AAPAEACAOAADsBAAg6AEAAIsDACACBwAAjgQAIPABAACLAwAgAAfMAQEAAAAB0AFAAAAAAdEBQAAAAAGAAkAAAAABigIBAAAAAYsCAQAAAAGMAgEAAAABDMwBAQAAAAHQAUAAAAAB0QFAAAAAAYECAQAAAAGCAgEAAAABgwIBAAAAAYQCAQAAAAGFAgEAAAABhgJAAAAAAYcCQAAAAAGIAgEAAAABiQIBAAAAAQ_MAQEAAAAB0AFAAAAAAdEBQAAAAAHiAQAAAPQBAu0BAQAAAAHuAQEAAAAB7wEBAAAAAfABAQAAAAHxASAAAAAB8gEQAAAAAfQBAQAAAAH1ASAAAAAB9gFAAAAAAfcBQAAAAAH5AQEAAAABBcwBAQAAAAHQAUAAAAAB0QFAAAAAAd0BAQAAAAHqAQAAAOoBAgfMAQEAAAAB0AFAAAAAAdEBQAAAAAHdAQEAAAAB5gEBAAAAAecBIAAAAAHoAQEAAAABCswBAQAAAAHQAUAAAAAB0QFAAAAAAd0BAQAAAAHfARAAAAAB4AEBAAAAAeIBAAAA4gEC4wEBAAAAAeQBAQAAAAHlAUAAAAABDgUAAOQEACAHAADlBAAgDAAA5gQAIA8AAOcEACAQAADoBAAgzAEBAAAAAc0BAQAAAAHQAUAAAAAB0QFAAAAAAeIBAAAAkgIC-gEBAAAAAY0CIAAAAAGOAgEAAAABkAIAAACQAgICAAAAAQAgHQAA-QQAIAMAAAAyACAdAAD5BAAgHgAA_QQAIBAAAAAyACAFAACiBAAgBwAAowQAIAwAAKQEACAPAAClBAAgEAAApgQAIBYAAP0EACDMAQEAiAMAIc0BAQCIAwAh0AFAAIoDACHRAUAAigMAIeIBAACgBJICIvoBAQCIAwAhjQIgAIkDACGOAgEAkwMAIZACAACfBJACIg4FAACiBAAgBwAAowQAIAwAAKQEACAPAAClBAAgEAAApgQAIMwBAQCIAwAhzQEBAIgDACHQAUAAigMAIdEBQACKAwAh4gEAAKAEkgIi-gEBAIgDACGNAiAAiQMAIY4CAQCTAwAhkAIAAJ8EkAIiDgQAAOMEACAHAADlBAAgDAAA5gQAIA8AAOcEACAQAADoBAAgzAEBAAAAAc0BAQAAAAHQAUAAAAAB0QFAAAAAAeIBAAAAkgIC-gEBAAAAAY0CIAAAAAGOAgEAAAABkAIAAACQAgICAAAAAQAgHQAA_gQAIAMAAAAyACAdAAD-BAAgHgAAggUAIBAAAAAyACAEAAChBAAgBwAAowQAIAwAAKQEACAPAAClBAAgEAAApgQAIBYAAIIFACDMAQEAiAMAIc0BAQCIAwAh0AFAAIoDACHRAUAAigMAIeIBAACgBJICIvoBAQCIAwAhjQIgAIkDACGOAgEAkwMAIZACAACfBJACIg4EAAChBAAgBwAAowQAIAwAAKQEACAPAAClBAAgEAAApgQAIMwBAQCIAwAhzQEBAIgDACHQAUAAigMAIdEBQACKAwAh4gEAAKAEkgIi-gEBAIgDACGNAiAAiQMAIY4CAQCTAwAhkAIAAJ8EkAIiD8wBAQAAAAHQAUAAAAAB0QFAAAAAAeIBAAAA9AEC7QEBAAAAAe4BAQAAAAHvAQEAAAAB8AEBAAAAAfEBIAAAAAHyARAAAAAB9AEBAAAAAfUBIAAAAAH2AUAAAAAB9wFAAAAAAfgBAQAAAAEFzAEBAAAAAdABQAAAAAHRAUAAAAAB8AEBAAAAAfoBAQAAAAECAAAAjQEAIB0AAIQFACAOBAAA4wQAIAUAAOQEACAMAADmBAAgDwAA5wQAIBAAAOgEACDMAQEAAAABzQEBAAAAAdABQAAAAAHRAUAAAAAB4gEAAACSAgL6AQEAAAABjQIgAAAAAY4CAQAAAAGQAgAAAJACAgIAAAABACAdAACGBQAgBMwBAQAAAAHQAUAAAAAB6wEBAAAAAewBAQAAAAEFzAEBAAAAAdABQAAAAAHRAUAAAAAB3gEBAAAAAeoBAAAA6gECB8wBAQAAAAHQAUAAAAAB0QFAAAAAAd4BAQAAAAHmAQEAAAAB5wEgAAAAAegBAQAAAAEKzAEBAAAAAdABQAAAAAHRAUAAAAAB3gEBAAAAAd8BEAAAAAHgAQEAAAAB4gEAAADiAQLjAQEAAAAB5AEBAAAAAeUBQAAAAAEDAAAAkAEAIB0AAIQFACAeAACOBQAgBwAAAJABACAWAACOBQAgzAEBAIgDACHQAUAAigMAIdEBQACKAwAh8AEBAJMDACH6AQEAiAMAIQXMAQEAiAMAIdABQACKAwAh0QFAAIoDACHwAQEAkwMAIfoBAQCIAwAhAwAAADIAIB0AAIYFACAeAACRBQAgEAAAADIAIAQAAKEEACAFAACiBAAgDAAApAQAIA8AAKUEACAQAACmBAAgFgAAkQUAIMwBAQCIAwAhzQEBAIgDACHQAUAAigMAIdEBQACKAwAh4gEAAKAEkgIi-gEBAIgDACGNAiAAiQMAIY4CAQCTAwAhkAIAAJ8EkAIiDgQAAKEEACAFAACiBAAgDAAApAQAIA8AAKUEACAQAACmBAAgzAEBAIgDACHNAQEAiAMAIdABQACKAwAh0QFAAIoDACHiAQAAoASSAiL6AQEAiAMAIY0CIACJAwAhjgIBAJMDACGQAgAAnwSQAiIVBgAA9wMAIAkAAPgDACAMAAD6AwAgDwAA-wMAIBAAAPwDACDMAQEAAAAB0AFAAAAAAdEBQAAAAAHiAQAAAPQBAu0BAQAAAAHuAQEAAAAB7wEBAAAAAfABAQAAAAHxASAAAAAB8gEQAAAAAfQBAQAAAAH1ASAAAAAB9gFAAAAAAfcBQAAAAAH4AQEAAAAB-QEBAAAAAQIAAAANACAdAACSBQAgAwAAAAsAIB0AAJIFACAeAACWBQAgFwAAAAsAIAYAAMQDACAJAADFAwAgDAAAxwMAIA8AAMgDACAQAADJAwAgFgAAlgUAIMwBAQCIAwAh0AFAAIoDACHRAUAAigMAIeIBAADDA_QBIu0BAQCIAwAh7gEBAIgDACHvAQEAiAMAIfABAQCIAwAh8QEgAIkDACHyARAAwgMAIfQBAQCTAwAh9QEgAIkDACH2AUAAlAMAIfcBQACUAwAh-AEBAIgDACH5AQEAiAMAIRUGAADEAwAgCQAAxQMAIAwAAMcDACAPAADIAwAgEAAAyQMAIMwBAQCIAwAh0AFAAIoDACHRAUAAigMAIeIBAADDA_QBIu0BAQCIAwAh7gEBAIgDACHvAQEAiAMAIfABAQCIAwAh8QEgAIkDACHyARAAwgMAIfQBAQCTAwAh9QEgAIkDACH2AUAAlAMAIfcBQACUAwAh-AEBAIgDACH5AQEAiAMAIQ4EAADjBAAgBQAA5AQAIAcAAOUEACAPAADnBAAgEAAA6AQAIMwBAQAAAAHNAQEAAAAB0AFAAAAAAdEBQAAAAAHiAQAAAJICAvoBAQAAAAGNAiAAAAABjgIBAAAAAZACAAAAkAICAgAAAAEAIB0AAJcFACAVBgAA9wMAIAkAAPgDACALAAD5AwAgDwAA-wMAIBAAAPwDACDMAQEAAAAB0AFAAAAAAdEBQAAAAAHiAQAAAPQBAu0BAQAAAAHuAQEAAAAB7wEBAAAAAfABAQAAAAHxASAAAAAB8gEQAAAAAfQBAQAAAAH1ASAAAAAB9gFAAAAAAfcBQAAAAAH4AQEAAAAB-QEBAAAAAQIAAAANACAdAACZBQAgAwAAADIAIB0AAJcFACAeAACdBQAgEAAAADIAIAQAAKEEACAFAACiBAAgBwAAowQAIA8AAKUEACAQAACmBAAgFgAAnQUAIMwBAQCIAwAhzQEBAIgDACHQAUAAigMAIdEBQACKAwAh4gEAAKAEkgIi-gEBAIgDACGNAiAAiQMAIY4CAQCTAwAhkAIAAJ8EkAIiDgQAAKEEACAFAACiBAAgBwAAowQAIA8AAKUEACAQAACmBAAgzAEBAIgDACHNAQEAiAMAIdABQACKAwAh0QFAAIoDACHiAQAAoASSAiL6AQEAiAMAIY0CIACJAwAhjgIBAJMDACGQAgAAnwSQAiIDAAAACwAgHQAAmQUAIB4AAKAFACAXAAAACwAgBgAAxAMAIAkAAMUDACALAADGAwAgDwAAyAMAIBAAAMkDACAWAACgBQAgzAEBAIgDACHQAUAAigMAIdEBQACKAwAh4gEAAMMD9AEi7QEBAIgDACHuAQEAiAMAIe8BAQCIAwAh8AEBAIgDACHxASAAiQMAIfIBEADCAwAh9AEBAJMDACH1ASAAiQMAIfYBQACUAwAh9wFAAJQDACH4AQEAiAMAIfkBAQCIAwAhFQYAAMQDACAJAADFAwAgCwAAxgMAIA8AAMgDACAQAADJAwAgzAEBAIgDACHQAUAAigMAIdEBQACKAwAh4gEAAMMD9AEi7QEBAIgDACHuAQEAiAMAIe8BAQCIAwAh8AEBAIgDACHxASAAiQMAIfIBEADCAwAh9AEBAJMDACH1ASAAiQMAIfYBQACUAwAh9wFAAJQDACH4AQEAiAMAIfkBAQCIAwAhCwMAAK0DACAKAACsAwAgDQAArwMAIMwBAQAAAAHQAUAAAAAB0QFAAAAAAd0BAQAAAAHeAQEAAAAB5gEBAAAAAecBIAAAAAHoAQEAAAABAgAAABsAIB0AAKEFACAOBAAA4wQAIAUAAOQEACAHAADlBAAgDAAA5gQAIBAAAOgEACDMAQEAAAABzQEBAAAAAdABQAAAAAHRAUAAAAAB4gEAAACSAgL6AQEAAAABjQIgAAAAAY4CAQAAAAGQAgAAAJACAgIAAAABACAdAACjBQAgFQYAAPcDACAJAAD4AwAgCwAA-QMAIAwAAPoDACAQAAD8AwAgzAEBAAAAAdABQAAAAAHRAUAAAAAB4gEAAAD0AQLtAQEAAAAB7gEBAAAAAe8BAQAAAAHwAQEAAAAB8QEgAAAAAfIBEAAAAAH0AQEAAAAB9QEgAAAAAfYBQAAAAAH3AUAAAAAB-AEBAAAAAfkBAQAAAAECAAAADQAgHQAApQUAIAfMAQEAAAAB0AFAAAAAAdEBQAAAAAHdAQEAAAAB3gEBAAAAAeYBAQAAAAHnASAAAAABAwAAABkAIB0AAKEFACAeAACqBQAgDQAAABkAIAMAAJ0DACAKAACcAwAgDQAAngMAIBYAAKoFACDMAQEAiAMAIdABQACKAwAh0QFAAIoDACHdAQEAiAMAId4BAQCIAwAh5gEBAIgDACHnASAAiQMAIegBAQCTAwAhCwMAAJ0DACAKAACcAwAgDQAAngMAIMwBAQCIAwAh0AFAAIoDACHRAUAAigMAId0BAQCIAwAh3gEBAIgDACHmAQEAiAMAIecBIACJAwAh6AEBAJMDACEDAAAAMgAgHQAAowUAIB4AAK0FACAQAAAAMgAgBAAAoQQAIAUAAKIEACAHAACjBAAgDAAApAQAIBAAAKYEACAWAACtBQAgzAEBAIgDACHNAQEAiAMAIdABQACKAwAh0QFAAIoDACHiAQAAoASSAiL6AQEAiAMAIY0CIACJAwAhjgIBAJMDACGQAgAAnwSQAiIOBAAAoQQAIAUAAKIEACAHAACjBAAgDAAApAQAIBAAAKYEACDMAQEAiAMAIc0BAQCIAwAh0AFAAIoDACHRAUAAigMAIeIBAACgBJICIvoBAQCIAwAhjQIgAIkDACGOAgEAkwMAIZACAACfBJACIgMAAAALACAdAAClBQAgHgAAsAUAIBcAAAALACAGAADEAwAgCQAAxQMAIAsAAMYDACAMAADHAwAgEAAAyQMAIBYAALAFACDMAQEAiAMAIdABQACKAwAh0QFAAIoDACHiAQAAwwP0ASLtAQEAiAMAIe4BAQCIAwAh7wEBAIgDACHwAQEAiAMAIfEBIACJAwAh8gEQAMIDACH0AQEAkwMAIfUBIACJAwAh9gFAAJQDACH3AUAAlAMAIfgBAQCIAwAh-QEBAIgDACEVBgAAxAMAIAkAAMUDACALAADGAwAgDAAAxwMAIBAAAMkDACDMAQEAiAMAIdABQACKAwAh0QFAAIoDACHiAQAAwwP0ASLtAQEAiAMAIe4BAQCIAwAh7wEBAIgDACHwAQEAiAMAIfEBIACJAwAh8gEQAMIDACH0AQEAkwMAIfUBIACJAwAh9gFAAJQDACH3AUAAlAMAIfgBAQCIAwAh-QEBAIgDACEOBAAA4wQAIAUAAOQEACAHAADlBAAgDAAA5gQAIA8AAOcEACDMAQEAAAABzQEBAAAAAdABQAAAAAHRAUAAAAAB4gEAAACSAgL6AQEAAAABjQIgAAAAAY4CAQAAAAGQAgAAAJACAgIAAAABACAdAACxBQAgFQYAAPcDACAJAAD4AwAgCwAA-QMAIAwAAPoDACAPAAD7AwAgzAEBAAAAAdABQAAAAAHRAUAAAAAB4gEAAAD0AQLtAQEAAAAB7gEBAAAAAe8BAQAAAAHwAQEAAAAB8QEgAAAAAfIBEAAAAAH0AQEAAAAB9QEgAAAAAfYBQAAAAAH3AUAAAAAB-AEBAAAAAfkBAQAAAAECAAAADQAgHQAAswUAIAMAAAAyACAdAACxBQAgHgAAtwUAIBAAAAAyACAEAAChBAAgBQAAogQAIAcAAKMEACAMAACkBAAgDwAApQQAIBYAALcFACDMAQEAiAMAIc0BAQCIAwAh0AFAAIoDACHRAUAAigMAIeIBAACgBJICIvoBAQCIAwAhjQIgAIkDACGOAgEAkwMAIZACAACfBJACIg4EAAChBAAgBQAAogQAIAcAAKMEACAMAACkBAAgDwAApQQAIMwBAQCIAwAhzQEBAIgDACHQAUAAigMAIdEBQACKAwAh4gEAAKAEkgIi-gEBAIgDACGNAiAAiQMAIY4CAQCTAwAhkAIAAJ8EkAIiAwAAAAsAIB0AALMFACAeAAC6BQAgFwAAAAsAIAYAAMQDACAJAADFAwAgCwAAxgMAIAwAAMcDACAPAADIAwAgFgAAugUAIMwBAQCIAwAh0AFAAIoDACHRAUAAigMAIeIBAADDA_QBIu0BAQCIAwAh7gEBAIgDACHvAQEAiAMAIfABAQCIAwAh8QEgAIkDACHyARAAwgMAIfQBAQCTAwAh9QEgAIkDACH2AUAAlAMAIfcBQACUAwAh-AEBAIgDACH5AQEAiAMAIRUGAADEAwAgCQAAxQMAIAsAAMYDACAMAADHAwAgDwAAyAMAIMwBAQCIAwAh0AFAAIoDACHRAUAAigMAIeIBAADDA_QBIu0BAQCIAwAh7gEBAIgDACHvAQEAiAMAIfABAQCIAwAh8QEgAIkDACHyARAAwgMAIfQBAQCTAwAh9QEgAIkDACH2AUAAlAMAIfcBQACUAwAh-AEBAIgDACH5AQEAiAMAIQcEBgIFCgMHDgQIAA0MKAgPKQkQKgsBAwABAQMAAQcGAAEIAAwJAAULFAcMGAgPHAkQIwsCBw8ECAAGAQcQAAEKAAQCAwABCgAEBQMAAQgACgoABA0dCQ4eCQEOHwACAwABCgAEBAskAAwlAA8mABAnAAYEKwAFLAAHLQAMLgAPLwAQMAAAAAADCAASIwATJAAUAAAAAwgAEiMAEyQAFAEDAAEBAwABAwgAGSMAGiQAGwAAAAMIABkjABokABsBAwABAQMAAQMIACAjACEkACIAAAADCAAgIwAhJAAiAAAAAwgAKCMAKSQAKgAAAAMIACgjACkkACoAAAMIAC8jADAkADEAAAADCAAvIwAwJAAxAgYAAQkABQIGAAEJAAUFCAA2IwA5JAA6dQA3dgA4AAAAAAAFCAA2IwA5JAA6dQA3dgA4AQoABAEKAAQDCAA_IwBAJABBAAAAAwgAPyMAQCQAQQIDAAEKAAQCAwABCgAEAwgARiMARyQASAAAAAMIAEYjAEckAEgDAwABCgAEDfIBCQMDAAEKAAQN-AEJAwgATSMATiQATwAAAAMIAE0jAE4kAE8CAwABCgAEAgMAAQoABAUIAFQjAFckAFh1AFV2AFYAAAAAAAUIAFQjAFckAFh1AFV2AFYAAAADCABeIwBfJABgAAAAAwgAXiMAXyQAYBECARIxARM0ARQ1ARU2ARc4ARg6Dhk7Dxo9ARs_DhxAEB9BASBCASFDDiVGESZHFSdIAihJAilKAipLAitMAixOAi1QDi5RFi9TAjBVDjFWFzJXAjNYAjRZDjVcGDZdHDdeAzhfAzlgAzphAztiAzxkAz1mDj5nHT9pA0BrDkFsHkJtA0NuA0RvDkVyH0ZzI0d1JEh2JEl5JEp6JEt7JEx9JE1_Dk6AASVPggEkUIQBDlGFASZShgEkU4cBJFSIAQ5ViwEnVowBK1eOAQVYjwEFWZIBBVqTAQVblAEFXJYBBV2YAQ5emQEsX5sBBWCdAQ5hngEtYp8BBWOgAQVkoQEOZaQBLmalATJnpgEEaKcBBGmoAQRqqQEEa6oBBGysAQRtrgEObq8BM2-xAQRwswEOcbQBNHK1AQRztgEEdLcBDne6ATV4uwE7ebwBB3q9AQd7vgEHfL8BB33AAQd-wgEHf8QBDoABxQE8gQHHAQeCAckBDoMBygE9hAHLAQeFAcwBB4YBzQEOhwHQAT6IAdEBQokB0gEIigHTAQiLAdQBCIwB1QEIjQHWAQiOAdgBCI8B2gEOkAHbAUORAd0BCJIB3wEOkwHgAUSUAeEBCJUB4gEIlgHjAQ6XAeYBRZgB5wFJmQHoAQmaAekBCZsB6gEJnAHrAQmdAewBCZ4B7gEJnwHwAQ6gAfEBSqEB9AEJogH2AQ6jAfcBS6QB-QEJpQH6AQmmAfsBDqcB_gFMqAH_AVCpAYACC6oBgQILqwGCAgusAYMCC60BhAILrgGGAguvAYgCDrABiQJRsQGLAguyAY0CDrMBjgJStAGPAgu1AZACC7YBkQIOtwGUAlO4AZUCWbkBlwJaugGYAlq7AZsCWrwBnAJavQGdAlq-AZ8CWr8BoQIOwAGiAlvBAaQCWsIBpgIOwwGnAlzEAagCWsUBqQJaxgGqAg7HAa0CXcgBrgJh"
+};
+async function decodeBase64AsWasm(wasmBase64) {
+  const { Buffer: Buffer2 } = await import("buffer");
+  const wasmArray = Buffer2.from(wasmBase64, "base64");
+  return new WebAssembly.Module(wasmArray);
+}
+config.compilerWasm = {
+  getRuntime: async () => await import("@prisma/client/runtime/query_compiler_fast_bg.postgresql.mjs"),
+  getQueryCompilerWasmModule: async () => {
+    const { wasm } = await import("@prisma/client/runtime/query_compiler_fast_bg.postgresql.wasm-base64.mjs");
+    return await decodeBase64AsWasm(wasm);
+  },
+  importName: "./query_compiler_fast_bg.js"
+};
+function getPrismaClientClass() {
+  return runtime.getPrismaClient(config);
+}
+
+// src/generated/prisma/internal/prismaNamespace.ts
+var prismaNamespace_exports = {};
+__export(prismaNamespace_exports, {
+  AccountScalarFieldEnum: () => AccountScalarFieldEnum,
+  AnyNull: () => AnyNull2,
+  CategoryScalarFieldEnum: () => CategoryScalarFieldEnum,
+  DbNull: () => DbNull2,
+  Decimal: () => Decimal2,
+  IdeaCommentScalarFieldEnum: () => IdeaCommentScalarFieldEnum,
+  IdeaMediaScalarFieldEnum: () => IdeaMediaScalarFieldEnum,
+  IdeaPurchaseScalarFieldEnum: () => IdeaPurchaseScalarFieldEnum,
+  IdeaScalarFieldEnum: () => IdeaScalarFieldEnum,
+  IdeaVoteScalarFieldEnum: () => IdeaVoteScalarFieldEnum,
+  JsonNull: () => JsonNull2,
+  ModelName: () => ModelName,
+  NewsletterSubscriberScalarFieldEnum: () => NewsletterSubscriberScalarFieldEnum,
+  NullTypes: () => NullTypes2,
+  NullsOrder: () => NullsOrder,
+  PrismaClientInitializationError: () => PrismaClientInitializationError2,
+  PrismaClientKnownRequestError: () => PrismaClientKnownRequestError2,
+  PrismaClientRustPanicError: () => PrismaClientRustPanicError2,
+  PrismaClientUnknownRequestError: () => PrismaClientUnknownRequestError2,
+  PrismaClientValidationError: () => PrismaClientValidationError2,
+  QueryMode: () => QueryMode,
+  SessionScalarFieldEnum: () => SessionScalarFieldEnum,
+  SortOrder: () => SortOrder,
+  Sql: () => Sql2,
+  TransactionIsolationLevel: () => TransactionIsolationLevel,
+  UserScalarFieldEnum: () => UserScalarFieldEnum,
+  VerificationScalarFieldEnum: () => VerificationScalarFieldEnum,
+  defineExtension: () => defineExtension,
+  empty: () => empty2,
+  getExtensionContext: () => getExtensionContext,
+  join: () => join2,
+  prismaVersion: () => prismaVersion,
+  raw: () => raw2,
+  sql: () => sql
+});
+import * as runtime2 from "@prisma/client/runtime/client";
+var PrismaClientKnownRequestError2 = runtime2.PrismaClientKnownRequestError;
+var PrismaClientUnknownRequestError2 = runtime2.PrismaClientUnknownRequestError;
+var PrismaClientRustPanicError2 = runtime2.PrismaClientRustPanicError;
+var PrismaClientInitializationError2 = runtime2.PrismaClientInitializationError;
+var PrismaClientValidationError2 = runtime2.PrismaClientValidationError;
+var sql = runtime2.sqltag;
+var empty2 = runtime2.empty;
+var join2 = runtime2.join;
+var raw2 = runtime2.raw;
+var Sql2 = runtime2.Sql;
+var Decimal2 = runtime2.Decimal;
+var getExtensionContext = runtime2.Extensions.getExtensionContext;
+var prismaVersion = {
+  client: "7.5.0",
+  engine: "280c870be64f457428992c43c1f6d557fab6e29e"
+};
+var NullTypes2 = {
+  DbNull: runtime2.NullTypes.DbNull,
+  JsonNull: runtime2.NullTypes.JsonNull,
+  AnyNull: runtime2.NullTypes.AnyNull
+};
+var DbNull2 = runtime2.DbNull;
+var JsonNull2 = runtime2.JsonNull;
+var AnyNull2 = runtime2.AnyNull;
+var ModelName = {
+  User: "User",
+  Session: "Session",
+  Account: "Account",
+  Verification: "Verification",
+  Category: "Category",
+  Idea: "Idea",
+  IdeaMedia: "IdeaMedia",
+  IdeaVote: "IdeaVote",
+  IdeaComment: "IdeaComment",
+  IdeaPurchase: "IdeaPurchase",
+  NewsletterSubscriber: "NewsletterSubscriber"
+};
+var TransactionIsolationLevel = runtime2.makeStrictEnum({
+  ReadUncommitted: "ReadUncommitted",
+  ReadCommitted: "ReadCommitted",
+  RepeatableRead: "RepeatableRead",
+  Serializable: "Serializable"
+});
+var UserScalarFieldEnum = {
+  id: "id",
+  name: "name",
+  email: "email",
+  emailVerified: "emailVerified",
+  image: "image",
+  role: "role",
+  status: "status",
+  createdAt: "createdAt",
+  updatedAt: "updatedAt"
+};
+var SessionScalarFieldEnum = {
+  id: "id",
+  expiresAt: "expiresAt",
+  token: "token",
+  createdAt: "createdAt",
+  updatedAt: "updatedAt",
+  ipAddress: "ipAddress",
+  userAgent: "userAgent",
+  userId: "userId"
+};
+var AccountScalarFieldEnum = {
+  id: "id",
+  accountId: "accountId",
+  providerId: "providerId",
+  userId: "userId",
+  accessToken: "accessToken",
+  refreshToken: "refreshToken",
+  idToken: "idToken",
+  accessTokenExpiresAt: "accessTokenExpiresAt",
+  refreshTokenExpiresAt: "refreshTokenExpiresAt",
+  scope: "scope",
+  password: "password",
+  createdAt: "createdAt",
+  updatedAt: "updatedAt"
+};
+var VerificationScalarFieldEnum = {
+  id: "id",
+  identifier: "identifier",
+  value: "value",
+  expiresAt: "expiresAt",
+  createdAt: "createdAt",
+  updatedAt: "updatedAt"
+};
+var CategoryScalarFieldEnum = {
+  id: "id",
+  name: "name",
+  description: "description",
+  createdAt: "createdAt",
+  updatedAt: "updatedAt"
+};
+var IdeaScalarFieldEnum = {
+  id: "id",
+  title: "title",
+  problemStatement: "problemStatement",
+  proposedSolution: "proposedSolution",
+  description: "description",
+  isPaid: "isPaid",
+  price: "price",
+  status: "status",
+  rejectionReason: "rejectionReason",
+  isHighlighted: "isHighlighted",
+  submittedAt: "submittedAt",
+  approvedAt: "approvedAt",
+  createdAt: "createdAt",
+  updatedAt: "updatedAt",
+  authorId: "authorId",
+  categoryId: "categoryId"
+};
+var IdeaMediaScalarFieldEnum = {
+  id: "id",
+  ideaId: "ideaId",
+  url: "url",
+  altText: "altText",
+  createdAt: "createdAt"
+};
+var IdeaVoteScalarFieldEnum = {
+  id: "id",
+  type: "type",
+  ideaId: "ideaId",
+  userId: "userId",
+  createdAt: "createdAt",
+  updatedAt: "updatedAt"
+};
+var IdeaCommentScalarFieldEnum = {
+  id: "id",
+  content: "content",
+  isDeleted: "isDeleted",
+  ideaId: "ideaId",
+  userId: "userId",
+  parentId: "parentId",
+  createdAt: "createdAt",
+  updatedAt: "updatedAt"
+};
+var IdeaPurchaseScalarFieldEnum = {
+  id: "id",
+  ideaId: "ideaId",
+  userId: "userId",
+  amount: "amount",
+  currency: "currency",
+  status: "status",
+  paymentProvider: "paymentProvider",
+  transactionId: "transactionId",
+  purchasedAt: "purchasedAt",
+  createdAt: "createdAt",
+  updatedAt: "updatedAt"
+};
+var NewsletterSubscriberScalarFieldEnum = {
+  id: "id",
+  email: "email",
+  subscribed: "subscribed",
+  subscribedAt: "subscribedAt",
+  createdAt: "createdAt",
+  updatedAt: "updatedAt"
+};
+var SortOrder = {
+  asc: "asc",
+  desc: "desc"
+};
+var QueryMode = {
+  default: "default",
+  insensitive: "insensitive"
+};
+var NullsOrder = {
+  first: "first",
+  last: "last"
+};
+var defineExtension = runtime2.Extensions.defineExtension;
+
+// src/generated/prisma/client.ts
+globalThis["__dirname"] = path2.dirname(fileURLToPath(import.meta.url));
+var PrismaClient = getPrismaClientClass();
+
+// src/app/lib/prisma.ts
+var prismaGlobal = globalThis;
+var adapter = new PrismaPg({
+  connectionString: envVariables.DATABASE_URL
+});
+var prisma = prismaGlobal.prisma ?? new PrismaClient({
+  adapter
+});
+if (envVariables.NODE_ENV !== "production") {
+  prismaGlobal.prisma = prisma;
+}
+
+// src/app/lib/auth.ts
+var userAdditionalFields = {
+  role: {
+    type: "string",
+    required: true,
+    defaultValue: UserRole.MEMBER
+  },
+  status: {
+    type: "string",
+    required: true,
+    defaultValue: UserStatus.ACTIVE
+  }
+};
+var auth = betterAuth({
+  baseURL: envVariables.BETTER_AUTH_URL,
+  secret: envVariables.BETTER_AUTH_SECRET,
+  database: prismaAdapter(prisma, { provider: "postgresql" }),
+  account: {
+    // Local Google OAuth can lose the temporary state cookie across redirects.
+    // Keep the security check enabled in production.
+    skipStateCookieCheck: envVariables.NODE_ENV === "development"
+  },
+  emailAndPassword: {
+    enabled: true,
+    requireEmailVerification: true,
+    sendResetPassword: async ({ user, url }) => {
+      await sendEmail({
+        to: user.email,
+        subject: "Reset your EcoSpark password",
+        templateName: "resetPassword",
+        templateData: {
+          name: user.name,
+          resetUrl: url
+        }
+      });
+    }
+  },
+  socialProviders: {
+    google: {
+      clientId: envVariables.GOOGLE_CLIENT_ID,
+      clientSecret: envVariables.GOOGLE_CLIENT_SECRET,
+      mapProfileToUser: () => ({
+        role: UserRole.MEMBER,
+        status: UserStatus.ACTIVE,
+        emailVerified: true
+      })
+    }
+  },
+  emailVerification: {
+    sendOnSignUp: true,
+    sendOnSignIn: true,
+    autoSignInAfterVerification: true,
+    sendVerificationEmail: async ({ user, url }) => {
+      await sendEmail({
+        to: user.email,
+        subject: "Verify your EcoSpark email",
+        templateName: "verification",
+        templateData: {
+          name: user.name,
+          verifyUrl: url
+        }
+      });
+    }
+  },
+  user: {
+    additionalFields: userAdditionalFields
+  },
+  session: {
+    expiresIn: 60 * 60 * 24,
+    updateAge: 60 * 60 * 12
+  },
+  redirectURLs: {
+    signIn: `${envVariables.BETTER_AUTH_URL}/api/v1/auth/google/callback`
+  },
+  trustedOrigins: [envVariables.FRONTEND_URL, envVariables.BETTER_AUTH_URL],
+  plugins: [
+    bearer(),
+    emailOTP({
+      sendVerificationOTP: async ({ email, otp, type }) => {
+        const user = await prisma.user.findUnique({
+          where: { email },
+          select: { name: true }
+        });
+        const subject = type === "forget-password" ? "EcoSpark password reset OTP" : "EcoSpark email verification OTP";
+        await sendEmail({
+          to: email,
+          subject,
+          templateName: "otp",
+          templateData: {
+            title: subject,
+            heading: type === "forget-password" ? "Password Reset OTP" : "Email Verification OTP",
+            name: user?.name || "EcoSpark User",
+            otp,
+            expiresInMinutes: 2
+          }
+        });
+      },
+      expiresIn: 2 * 60,
+      otpLength: 6
+    })
+  ],
+  advanced: {
+    useSecureCookies: false
+  }
+});
+
+// src/app/utils/jwt.ts
+import jwt from "jsonwebtoken";
+var createToken = (payload, secret, options) => {
+  return jwt.sign(payload, secret, options);
+};
+var verifyToken = (token, secret) => {
+  try {
+    const decoded = jwt.verify(token, secret);
+    return {
+      success: true,
+      data: decoded
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid token provided";
+    return {
+      success: false,
+      message
+    };
+  }
+};
+var decodeToken = (token) => {
+  const decoded = jwt.decode(token);
+  return decoded && typeof decoded !== "string" ? decoded : null;
+};
+var jwtUtils = {
+  createToken,
+  verifyToken,
+  decodeToken
+};
+
+// src/app/middleware/attachRequestUser.ts
+var toWebHeaders = (req) => {
+  const headers = new Headers();
+  Object.entries(req.headers).forEach(([key, value]) => {
+    if (typeof value === "string") {
+      headers.set(key, value);
+      return;
+    }
+    if (Array.isArray(value)) {
+      headers.set(key, value.join(","));
+    }
+  });
+  return headers;
+};
+var attachRequestUser = async (req, res, next) => {
+  try {
+    const session = await auth.api.getSession({
+      headers: toWebHeaders(req)
+    });
+    if (session?.user) {
+      const role = String(session.user.role);
+      if (role === "MEMBER" || role === "ADMIN") {
+        req.user = {
+          id: session.user.id,
+          email: session.user.email,
+          role
+        };
+      }
+    }
+    if (!req.user) {
+      const bearerToken = req.headers.authorization?.startsWith("Bearer ") ? req.headers.authorization.slice(7) : void 0;
+      const accessToken = bearerToken || (typeof req.cookies?.accessToken === "string" ? req.cookies.accessToken : void 0);
+      if (accessToken) {
+        const verified = jwtUtils.verifyToken(
+          accessToken,
+          envVariables.ACCESS_TOKEN_SECRET
+        );
+        if (verified.success) {
+          const role = verified.data.role;
+          if ((role === "MEMBER" || role === "ADMIN") && typeof verified.data.id === "string" && typeof verified.data.email === "string") {
+            req.user = {
+              id: verified.data.id,
+              email: verified.data.email,
+              role
+            };
+          }
+        }
+      }
+    }
+  } catch {
+  }
+  next();
+};
+
+// src/app/middleware/globalErrorHandler.ts
+import status4 from "http-status";
+import z from "zod";
+
+// src/app/errorHelpers/handlePrismaErrors.ts
+import status2 from "http-status";
+var getStatusCodeFromPrismaError = (errorCode) => {
+  if (errorCode === "P2002") {
+    return status2.CONFLICT;
+  }
+  if (["P2025", "P2001", "P2015", "P2018"].includes(errorCode)) {
+    return status2.NOT_FOUND;
+  }
+  if (["P1000", "P6002"].includes(errorCode)) {
+    return status2.UNAUTHORIZED;
+  }
+  if (["P1010", "P6010"].includes(errorCode)) {
+    return status2.FORBIDDEN;
+  }
+  if (errorCode === "P6003") {
+    return status2.PAYMENT_REQUIRED;
+  }
+  if (["P1008", "P2004", "P6004"].includes(errorCode)) {
+    return status2.GATEWAY_TIMEOUT;
+  }
+  if (errorCode === "P5011") {
+    return status2.TOO_MANY_REQUESTS;
+  }
+  if (errorCode === "P6009") {
+    return 413;
+  }
+  if (errorCode.startsWith("P1") || ["P2024", "P2037", "P6008"].includes(errorCode)) {
+    return status2.SERVICE_UNAVAILABLE;
+  }
+  if (errorCode.startsWith("P2")) {
+    return status2.BAD_REQUEST;
+  }
+  if (errorCode.startsWith("P3") || errorCode.startsWith("P4")) {
+    return status2.INTERNAL_SERVER_ERROR;
+  }
+  return status2.INTERNAL_SERVER_ERROR;
+};
+var formatErrorMeta = (meta) => {
+  if (!meta) return "";
+  const parts = [];
+  if (meta.target) {
+    parts.push(`Field(s): ${String(meta.target)}`);
+  }
+  if (meta.field_name) {
+    parts.push(`Field: ${String(meta.field_name)}`);
+  }
+  if (meta.column_name) {
+    parts.push(`Column: ${String(meta.column_name)}`);
+  }
+  if (meta.table) {
+    parts.push(`Table: ${String(meta.table)}`);
+  }
+  if (meta.model_name) {
+    parts.push(`Model: ${String(meta.model_name)}`);
+  }
+  if (meta.relation_name) {
+    parts.push(`Relation: ${String(meta.relation_name)}`);
+  }
+  if (meta.constraint) {
+    parts.push(`Constraint: ${String(meta.constraint)}`);
+  }
+  if (meta.database_error) {
+    parts.push(`Database Error: ${String(meta.database_error)}`);
+  }
+  return parts.length > 0 ? parts.join(" |") : "";
+};
+var handlePrismaClientKnownRequestError = (error) => {
+  const statusCode = getStatusCodeFromPrismaError(error.code);
+  const metaInfo = formatErrorMeta(error.meta);
+  let cleanMessage = error.message;
+  cleanMessage = cleanMessage.replace(/Invalid `.*?` invocation:?\s*/i, "");
+  const lines = cleanMessage.split("\n").filter((line) => line.trim());
+  const mainMessage = lines[0] || "An error occurred with the database operation.";
+  const errorSources = [
+    {
+      path: error.code,
+      message: metaInfo ? `${mainMessage} | ${metaInfo}` : mainMessage
+    }
+  ];
+  if (error.meta?.cause) {
+    errorSources.push({
+      path: "cause",
+      message: String(error.meta.cause)
+    });
+  }
+  return {
+    success: false,
+    statusCode,
+    message: `Prisma Client Known Request Error: ${mainMessage}`,
+    errorSources
+  };
+};
+var handlePrismaClientUnknownError = (error) => {
+  let cleanMessage = error.message;
+  cleanMessage = cleanMessage.replace(/Invalid `.*?` invocation:?\s*/i, "");
+  const lines = cleanMessage.split("\n").filter((line) => line.trim());
+  const mainMessage = lines[0] || "An unknown error occurred with the database operation.";
+  const errorSources = [
+    {
+      path: "Unknown Prisma Error",
+      message: mainMessage
+    }
+  ];
+  return {
+    success: false,
+    statusCode: status2.INTERNAL_SERVER_ERROR,
+    message: `Prisma Client Unknown Request Error: ${mainMessage}`,
+    errorSources
+  };
+};
+var handlePrismaClientValidationError = (error) => {
+  let cleanMessage = error.message;
+  cleanMessage = cleanMessage.replace(/Invalid `.*?` invocation:?\s*/i, "");
+  const lines = cleanMessage.split("\n").filter((line) => line.trim());
+  const errorSources = [];
+  const fieldMatch = cleanMessage.match(/Argument `(\w+)`/i);
+  const fieldName = fieldMatch ? fieldMatch[1] : "Unknown Field";
+  const mainMessage = lines.find(
+    (line) => !line.includes("Argument") && !line.includes("\u2192") && line.length > 10
+  ) || lines[0] || "Invalid query parameters provided to the database operation.";
+  errorSources.push({
+    path: fieldName,
+    message: mainMessage
+  });
+  return {
+    success: false,
+    statusCode: status2.BAD_REQUEST,
+    message: `Prisma Client Validation Error: ${mainMessage}`,
+    errorSources
+  };
+};
+var handlerPrismaClientInitializationError = (error) => {
+  const statusCode = error.errorCode ? getStatusCodeFromPrismaError(error.errorCode) : status2.SERVICE_UNAVAILABLE;
+  const cleanMessage = error.message;
+  cleanMessage.replace(/Invalid `.*?` invocation:?\s*/i, "");
+  const lines = cleanMessage.split("\n").filter((line) => line.trim());
+  const mainMessage = lines[0] || "An error occurred while initializing the Prisma Client.";
+  const errorSources = [
+    {
+      path: error.errorCode || "Initialization Error",
+      message: mainMessage
+    }
+  ];
+  return {
+    success: false,
+    statusCode,
+    message: `Prisma Client Initialization Error: ${mainMessage}`,
+    errorSources
+  };
+};
+var handlerPrismaClientRustPanicError = () => {
+  const errorSources = [
+    {
+      path: "Rust Engine Crashed",
+      message: "The database engine encountered a fatal error and crashed. This is usually due to an internal bug in the Prisma engine or an unexpected edge case in the database operation. Please check the Prisma logs for more details and consider reporting this issue to the Prisma team if it persists."
+    }
+  ];
+  return {
+    success: false,
+    statusCode: status2.INTERNAL_SERVER_ERROR,
+    message: "Prisma Client Rust Panic Error: The database engine crashed due to a fatal error.",
+    errorSources
+  };
+};
+
+// src/app/errorHelpers/handleZodError.ts
+import status3 from "http-status";
+var handleZodError = (err) => {
+  const statusCode = status3.BAD_REQUEST;
+  const message = "Zod Validation Error";
+  const errorSources = [];
+  err.issues.forEach((issue) => {
+    errorSources.push({
+      path: issue.path.join(" => "),
+      message: issue.message
+    });
+  });
+  return {
+    success: false,
+    message,
+    errorSources,
+    statusCode
+  };
+};
+
+// src/app/middleware/globalErrorHandler.ts
+var globalErrorHandler = (err, req, res, next) => {
+  if (envVariables.NODE_ENV === "development") {
+    console.log("Error from Global Error Handler", err);
+  }
+  let errorSources = [];
+  let statusCode = status4.INTERNAL_SERVER_ERROR;
+  let message = "Internal Server Error";
+  let stack;
+  if (err instanceof prismaNamespace_exports.PrismaClientKnownRequestError) {
+    const simplified = handlePrismaClientKnownRequestError(err);
+    statusCode = simplified.statusCode;
+    message = simplified.message;
+    errorSources = simplified.errorSources;
+    stack = err.stack;
+  } else if (err instanceof prismaNamespace_exports.PrismaClientUnknownRequestError) {
+    const simplified = handlePrismaClientUnknownError(err);
+    statusCode = simplified.statusCode;
+    message = simplified.message;
+    errorSources = simplified.errorSources;
+    stack = err.stack;
+  } else if (err instanceof prismaNamespace_exports.PrismaClientValidationError) {
+    const simplified = handlePrismaClientValidationError(err);
+    statusCode = simplified.statusCode;
+    message = simplified.message;
+    errorSources = simplified.errorSources;
+    stack = err.stack;
+  } else if (err instanceof prismaNamespace_exports.PrismaClientInitializationError) {
+    const simplified = handlerPrismaClientInitializationError(err);
+    statusCode = simplified.statusCode;
+    message = simplified.message;
+    errorSources = simplified.errorSources;
+    stack = err.stack;
+  } else if (err instanceof prismaNamespace_exports.PrismaClientRustPanicError) {
+    const simplified = handlerPrismaClientRustPanicError();
+    statusCode = simplified.statusCode;
+    message = simplified.message;
+    errorSources = simplified.errorSources;
+    stack = err.stack;
+  } else if (err instanceof z.ZodError) {
+    const simplified = handleZodError(err);
+    statusCode = simplified.statusCode;
+    message = simplified.message;
+    errorSources = simplified.errorSources;
+    stack = err.stack;
+  } else if (err instanceof AppError_default) {
+    statusCode = err.statusCode;
+    message = err.message;
+    errorSources = [{ path: "", message: err.message }];
+    stack = err.stack;
+  } else if (err instanceof Error) {
+    message = err.message;
+    errorSources = [{ path: "", message: err.message }];
+    stack = err.stack;
+  }
+  const errorResponse = {
+    success: false,
+    message,
+    errorSources,
+    error: envVariables.NODE_ENV === "development" ? err : void 0,
+    stack: envVariables.NODE_ENV === "development" ? stack : void 0
+  };
+  res.status(statusCode).json(errorResponse);
+};
+
+// src/app/middleware/notFound.ts
+var notFound = (req, res) => {
+  res.status(404).json({
+    success: false,
+    message: `Route not found: ${req.originalUrl}`
+  });
+};
+
+// src/app/routes/index.ts
+import { Router as Router11 } from "express";
+
+// src/app/modules/admin/admin.route.ts
+import { Router } from "express";
+
+// src/app/middleware/checkAuth.ts
+var checkAuth = (...roles) => {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({ success: false, message: "Unauthorized" });
+    }
+    if (roles.length > 0 && !roles.includes(req.user.role)) {
+      return res.status(403).json({ success: false, message: "Forbidden" });
+    }
+    return next();
+  };
+};
+
+// src/app/middleware/validateRequest.ts
+var validateRequest = (schema) => {
+  return async (req, res, next) => {
+    await schema.parseAsync({
+      body: req.body ?? {},
+      query: req.query ?? {},
+      params: req.params ?? {}
+    });
+    next();
+  };
+};
+
+// src/app/modules/admin/admin.controller.ts
+import status5 from "http-status";
+
+// src/app/shared/catchAsync.ts
+var catchAsync = (fn) => {
+  return (req, res, next) => {
+    Promise.resolve(fn(req, res, next)).catch(next);
+  };
+};
+
+// src/app/shared/sendResponse.ts
+var sendResponse = (res, payload) => {
+  const { statusCode, ...rest } = payload;
+  return res.status(statusCode).json(rest);
+};
+
+// src/app/modules/admin/admin.service.ts
+var getStats = async () => {
+  const [
+    totalUsers,
+    totalIdeas,
+    approvedIdeas,
+    rejectedIdeas,
+    underReviewIdeas,
+    totalComments,
+    totalPaidPurchases
+  ] = await Promise.all([
+    prisma.user.count(),
+    prisma.idea.count(),
+    prisma.idea.count({ where: { status: IdeaStatus.APPROVED } }),
+    prisma.idea.count({ where: { status: IdeaStatus.REJECTED } }),
+    prisma.idea.count({ where: { status: IdeaStatus.UNDER_REVIEW } }),
+    prisma.ideaComment.count(),
+    prisma.ideaPurchase.count({ where: { status: PurchaseStatus.PAID } })
+  ]);
+  return {
+    totalUsers,
+    totalIdeas,
+    approvedIdeas,
+    rejectedIdeas,
+    underReviewIdeas,
+    totalComments,
+    totalPaidPurchases
+  };
+};
+var updateUserStatus = async (id, status16) => {
+  return prisma.user.update({
+    where: { id },
+    data: {
+      status: status16
+    }
+  });
+};
+var AdminService = {
+  getStats,
+  updateUserStatus
+};
+
+// src/app/modules/admin/admin.controller.ts
+var getStats2 = catchAsync(async (_req, res) => {
+  const result = await AdminService.getStats();
+  sendResponse(res, {
+    statusCode: status5.OK,
+    success: true,
+    message: "Admin stats fetched successfully",
+    data: result
+  });
+});
+var updateUserStatus2 = catchAsync(async (req, res) => {
+  const result = await AdminService.updateUserStatus(String(req.params.id), req.body.status);
+  sendResponse(res, {
+    statusCode: status5.OK,
+    success: true,
+    message: "User status updated successfully",
+    data: result
+  });
+});
+var AdminController = {
+  getStats: getStats2,
+  updateUserStatus: updateUserStatus2
+};
+
+// src/app/modules/admin/admin.validation.ts
+import z2 from "zod";
+var updateUserStatus3 = z2.object({
+  body: z2.object({
+    status: z2.enum(["ACTIVE", "DEACTIVATED"])
+  })
+});
+var AdminValidation = {
+  updateUserStatus: updateUserStatus3
+};
+
+// src/app/modules/admin/admin.route.ts
+var router = Router();
+router.get("/stats", checkAuth("ADMIN"), AdminController.getStats);
+router.patch(
+  "/users/:id/status",
+  checkAuth("ADMIN"),
+  validateRequest(AdminValidation.updateUserStatus),
+  AdminController.updateUserStatus
+);
+var AdminRoutes = router;
+
+// src/app/modules/auth/auth.route.ts
+import { Router as Router2 } from "express";
+
+// src/app/modules/auth/auth.controller.ts
+import status7 from "http-status";
+
+// src/app/utils/token.ts
+import ms from "ms";
+
+// src/app/utils/cookie.ts
+var setCookie = (res, key, value, options) => {
+  res.cookie(key, value, options);
+};
+var getCookie = (req, key) => {
+  const value = req.cookies?.[key];
+  return typeof value === "string" ? value : void 0;
+};
+var clearCookie = (res, key, options) => {
+  res.clearCookie(key, options);
+};
+var CookieUtils = {
+  setCookie,
+  getCookie,
+  clearCookie
+};
+
+// src/app/utils/token.ts
+var getCookieCommonOptions = () => ({
+  httpOnly: true,
+  secure: envVariables.NODE_ENV === "production",
+  sameSite: envVariables.NODE_ENV === "production" ? "none" : "lax",
+  path: "/"
+});
+var getAccessToken = (payload) => {
+  return jwtUtils.createToken(payload, envVariables.ACCESS_TOKEN_SECRET, {
+    expiresIn: envVariables.ACCESS_TOKEN_EXPIRES_IN
+  });
+};
+var getRefreshToken = (payload) => {
+  return jwtUtils.createToken(payload, envVariables.REFRESH_TOKEN_SECRET, {
+    expiresIn: envVariables.REFRESH_TOKEN_EXPIRES_IN
+  });
+};
+var setAccessTokenCookie = (res, token) => {
+  CookieUtils.setCookie(res, "accessToken", token, {
+    ...getCookieCommonOptions(),
+    maxAge: ms(envVariables.ACCESS_TOKEN_EXPIRES_IN)
+  });
+};
+var setRefreshTokenCookie = (res, token) => {
+  CookieUtils.setCookie(res, "refreshToken", token, {
+    ...getCookieCommonOptions(),
+    maxAge: ms(envVariables.REFRESH_TOKEN_EXPIRES_IN)
+  });
+};
+var setBetterAuthSessionCookie = (res, token) => {
+  CookieUtils.setCookie(res, "better-auth.session_token", token, {
+    ...getCookieCommonOptions(),
+    maxAge: ms(
+      envVariables.BETTER_AUTH_SESSION_TOKEN_EXPIRES_IN
+    )
+  });
+};
+var clearAuthCookies = (res) => {
+  const options = getCookieCommonOptions();
+  CookieUtils.clearCookie(res, "accessToken", options);
+  CookieUtils.clearCookie(res, "refreshToken", options);
+  CookieUtils.clearCookie(res, "better-auth.session_token", options);
+};
+var tokenUtils = {
+  getAccessToken,
+  getRefreshToken,
+  setAccessTokenCookie,
+  setRefreshTokenCookie,
+  setBetterAuthSessionCookie,
+  clearAuthCookies
+};
+
+// src/app/modules/auth/auth.service.ts
+import status6 from "http-status";
+var getUserById = async (id) => {
+  return prisma.user.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      role: true,
+      status: true,
+      emailVerified: true
+    }
+  });
+};
+var getUserBySessionToken = async (sessionToken) => {
+  const session = await prisma.session.findUnique({
+    where: { token: sessionToken },
+    select: {
+      token: true,
+      userId: true,
+      expiresAt: true,
+      user: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+          status: true,
+          emailVerified: true
+        }
+      }
+    }
+  });
+  if (!session || session.expiresAt <= /* @__PURE__ */ new Date()) {
+    throw new AppError_default(status6.UNAUTHORIZED, "Invalid session token");
+  }
+  return session.user;
+};
+var getTrustedCallbackUrl = (callbackUrl) => {
+  const defaultCallbackUrl = envVariables.FRONTEND_URL;
+  if (!callbackUrl) {
+    return defaultCallbackUrl;
+  }
+  try {
+    const requestedUrl = new URL(callbackUrl);
+    const allowedOrigin = new URL(defaultCallbackUrl).origin;
+    if (requestedUrl.origin !== allowedOrigin) {
+      return defaultCallbackUrl;
+    }
+    return requestedUrl.toString();
+  } catch {
+    return defaultCallbackUrl;
+  }
+};
+var getGoogleCallbackHandlerUrl = (redirectTo) => {
+  const callbackUrl = new URL(
+    `${envVariables.BETTER_AUTH_URL.replace(/\/$/, "")}/api/v1/auth/google/callback`
+  );
+  callbackUrl.searchParams.set("redirectTo", getTrustedCallbackUrl(redirectTo));
+  return callbackUrl.toString();
+};
+var toTokenPayload = (user) => ({
+  id: user.id,
+  email: user.email,
+  role: user.role,
+  status: user.status || UserStatus.ACTIVE,
+  emailVerified: user.emailVerified ?? false
+});
+var parseSignInOrSignUpResponse = (value) => {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+  const token = "token" in value && typeof value.token === "string" ? value.token : void 0;
+  if (!("user" in value) || !value.user || typeof value.user !== "object") {
+    return { token };
+  }
+  const userObject = value.user;
+  if (typeof userObject.id !== "string" || typeof userObject.name !== "string" || typeof userObject.email !== "string" || userObject.role !== "MEMBER" && userObject.role !== "ADMIN") {
+    return { token };
+  }
+  const statusValue = userObject.status === UserStatus.ACTIVE || userObject.status === UserStatus.DEACTIVATED ? userObject.status : void 0;
+  return {
+    token,
+    user: {
+      id: userObject.id,
+      name: userObject.name,
+      email: userObject.email,
+      role: userObject.role,
+      status: statusValue,
+      emailVerified: typeof userObject.emailVerified === "boolean" ? userObject.emailVerified : void 0
+    }
+  };
+};
+var getCurrentUser = async (id) => {
+  const user = await prisma.user.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      role: true,
+      status: true,
+      emailVerified: true,
+      createdAt: true
+    }
+  });
+  if (!user) {
+    throw new AppError_default(404, "User not found");
+  }
+  return user;
+};
+var register = async (payload) => {
+  const result = await auth.api.signUpEmail({
+    body: {
+      name: payload.name,
+      email: payload.email,
+      password: payload.password
+    }
+  });
+  const parsed = parseSignInOrSignUpResponse(result);
+  if (!parsed.user) {
+    throw new AppError_default(status6.BAD_REQUEST, "Failed to register user");
+  }
+  const accessToken = tokenUtils.getAccessToken(toTokenPayload(parsed.user));
+  const refreshToken2 = tokenUtils.getRefreshToken(toTokenPayload(parsed.user));
+  return {
+    accessToken,
+    refreshToken: refreshToken2,
+    sessionToken: parsed.token,
+    user: parsed.user
+  };
+};
+var login = async (payload) => {
+  const result = await auth.api.signInEmail({
+    body: {
+      email: payload.email,
+      password: payload.password
+    }
+  });
+  const parsed = parseSignInOrSignUpResponse(result);
+  if (!parsed.user) {
+    throw new AppError_default(status6.UNAUTHORIZED, "Invalid email or password");
+  }
+  if (parsed.user.status === UserStatus.DEACTIVATED) {
+    throw new AppError_default(status6.FORBIDDEN, "User account is deactivated");
+  }
+  const accessToken = tokenUtils.getAccessToken(toTokenPayload(parsed.user));
+  const refreshToken2 = tokenUtils.getRefreshToken(toTokenPayload(parsed.user));
+  return {
+    accessToken,
+    refreshToken: refreshToken2,
+    sessionToken: parsed.token,
+    user: parsed.user
+  };
+};
+var getNewToken = async (payload, cookieRefreshToken, headerRefreshToken, sessionToken) => {
+  const refreshToken2 = payload?.refreshToken || cookieRefreshToken || headerRefreshToken;
+  let user = null;
+  if (refreshToken2) {
+    const verifiedRefreshToken = jwtUtils.verifyToken(
+      refreshToken2,
+      envVariables.REFRESH_TOKEN_SECRET
+    );
+    if (!verifiedRefreshToken.success) {
+      throw new AppError_default(status6.UNAUTHORIZED, "Invalid refresh token");
+    }
+    if (typeof verifiedRefreshToken.data.id !== "string" || typeof verifiedRefreshToken.data.email !== "string" || verifiedRefreshToken.data.role !== "MEMBER" && verifiedRefreshToken.data.role !== "ADMIN") {
+      throw new AppError_default(status6.UNAUTHORIZED, "Invalid refresh token payload");
+    }
+    user = await getUserById(verifiedRefreshToken.data.id);
+  } else if (sessionToken) {
+    user = await getUserBySessionToken(sessionToken);
+  } else {
+    return null;
+  }
+  if (!user) {
+    throw new AppError_default(status6.UNAUTHORIZED, "User not found");
+  }
+  if (user.status === UserStatus.DEACTIVATED) {
+    throw new AppError_default(status6.FORBIDDEN, "User account is deactivated");
+  }
+  if (sessionToken && refreshToken2) {
+    const sessionUser = await getUserBySessionToken(sessionToken);
+    if (sessionUser.id !== user.id) {
+      throw new AppError_default(status6.UNAUTHORIZED, "Invalid session token");
+    }
+  }
+  const tokenPayload = toTokenPayload({
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    role: user.role,
+    status: user.status,
+    emailVerified: user.emailVerified
+  });
+  const newAccessToken = tokenUtils.getAccessToken(tokenPayload);
+  const newRefreshToken = tokenUtils.getRefreshToken(tokenPayload);
+  return {
+    accessToken: newAccessToken,
+    refreshToken: newRefreshToken,
+    sessionToken
+  };
+};
+var getGoogleSignInUrl = (callbackUrl) => {
+  const searchParams = new URLSearchParams({
+    provider: "google",
+    callbackURL: getGoogleCallbackHandlerUrl(callbackUrl)
+  });
+  return `${envVariables.BETTER_AUTH_URL.replace(/\/$/, "")}/api/auth/sign-in/social?${searchParams.toString()}`;
+};
+var completeSocialLogin = async (sessionToken) => {
+  const user = await getUserBySessionToken(sessionToken);
+  if (user.status === UserStatus.DEACTIVATED) {
+    throw new AppError_default(status6.FORBIDDEN, "User account is deactivated");
+  }
+  const tokenPayload = toTokenPayload({
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    role: user.role,
+    status: user.status,
+    emailVerified: user.emailVerified
+  });
+  return {
+    accessToken: tokenUtils.getAccessToken(tokenPayload),
+    refreshToken: tokenUtils.getRefreshToken(tokenPayload),
+    sessionToken,
+    user
+  };
+};
+var changePassword = async (userId, payload, sessionToken) => {
+  if (!sessionToken) {
+    throw new AppError_default(status6.UNAUTHORIZED, "Session token is required");
+  }
+  await auth.api.changePassword({
+    body: {
+      currentPassword: payload.currentPassword,
+      newPassword: payload.newPassword,
+      revokeOtherSessions: true
+    },
+    headers: new Headers({
+      Authorization: `Bearer ${sessionToken}`
+    })
+  });
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      role: true,
+      status: true,
+      emailVerified: true
+    }
+  });
+  if (!user) {
+    throw new AppError_default(status6.NOT_FOUND, "User not found");
+  }
+  const tokenPayload = toTokenPayload({
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    role: user.role,
+    status: user.status,
+    emailVerified: user.emailVerified
+  });
+  return {
+    accessToken: tokenUtils.getAccessToken(tokenPayload),
+    refreshToken: tokenUtils.getRefreshToken(tokenPayload),
+    sessionToken
+  };
+};
+var logout = async (sessionToken) => {
+  if (!sessionToken) {
+    return;
+  }
+  await auth.api.signOut({
+    headers: new Headers({
+      Authorization: `Bearer ${sessionToken}`
+    })
+  });
+};
+var verifyEmail = async (payload) => {
+  await auth.api.verifyEmailOTP({
+    body: {
+      email: payload.email,
+      otp: payload.otp
+    }
+  });
+};
+var forgotPassword = async (payload) => {
+  const user = await prisma.user.findUnique({
+    where: { email: payload.email },
+    select: { id: true }
+  });
+  if (!user) {
+    throw new AppError_default(status6.NOT_FOUND, "User not found");
+  }
+  await auth.api.requestPasswordResetEmailOTP({
+    body: {
+      email: payload.email
+    }
+  });
+};
+var resetPassword = async (payload) => {
+  const user = await prisma.user.findUnique({
+    where: { email: payload.email },
+    select: { id: true }
+  });
+  if (!user) {
+    throw new AppError_default(status6.NOT_FOUND, "User not found");
+  }
+  await auth.api.resetPasswordEmailOTP({
+    body: {
+      email: payload.email,
+      otp: payload.otp,
+      password: payload.newPassword
+    }
+  });
+  await prisma.session.deleteMany({
+    where: {
+      userId: user.id
+    }
+  });
+};
+var AuthService = {
+  register,
+  login,
+  getNewToken,
+  getGoogleSignInUrl,
+  completeSocialLogin,
+  changePassword,
+  logout,
+  verifyEmail,
+  forgotPassword,
+  resetPassword,
+  getCurrentUser
+};
+
+// src/app/modules/auth/auth.controller.ts
+var getRefreshTokenFromHeader = (req) => {
+  const headerValue = req.headers["x-refresh-token"];
+  if (typeof headerValue === "string") {
+    return headerValue;
+  }
+  if (Array.isArray(headerValue) && typeof headerValue[0] === "string") {
+    return headerValue[0];
+  }
+  return void 0;
+};
+var register2 = catchAsync(async (req, res) => {
+  if (req.body?.role === "ADMIN") {
+    throw new AppError_default(
+      status7.FORBIDDEN,
+      "Admin accounts can only be created through seeding"
+    );
+  }
+  const result = await AuthService.register(req.body);
+  tokenUtils.setAccessTokenCookie(res, result.accessToken);
+  tokenUtils.setRefreshTokenCookie(res, result.refreshToken);
+  if (result.sessionToken) {
+    tokenUtils.setBetterAuthSessionCookie(res, result.sessionToken);
+  }
+  sendResponse(res, {
+    statusCode: status7.CREATED,
+    success: true,
+    message: "User registered successfully",
+    data: result
+  });
+});
+var login2 = catchAsync(async (req, res) => {
+  const result = await AuthService.login(req.body);
+  tokenUtils.setAccessTokenCookie(res, result.accessToken);
+  tokenUtils.setRefreshTokenCookie(res, result.refreshToken);
+  if (result.sessionToken) {
+    tokenUtils.setBetterAuthSessionCookie(res, result.sessionToken);
+  }
+  sendResponse(res, {
+    statusCode: status7.OK,
+    success: true,
+    message: "User logged in successfully",
+    data: result
+  });
+});
+var refreshToken = catchAsync(async (req, res) => {
+  const result = await AuthService.getNewToken(
+    req.body,
+    typeof req.cookies.refreshToken === "string" ? req.cookies.refreshToken : void 0,
+    getRefreshTokenFromHeader(req),
+    typeof req.cookies["better-auth.session_token"] === "string" ? req.cookies["better-auth.session_token"] : void 0
+  );
+  if (!result) {
+    tokenUtils.clearAuthCookies(res);
+    return sendResponse(res, {
+      statusCode: status7.UNAUTHORIZED,
+      success: false,
+      message: "Refresh token or session token is required"
+    });
+  }
+  tokenUtils.setAccessTokenCookie(res, result.accessToken);
+  tokenUtils.setRefreshTokenCookie(res, result.refreshToken);
+  if (result.sessionToken) {
+    tokenUtils.setBetterAuthSessionCookie(res, result.sessionToken);
+  }
+  sendResponse(res, {
+    statusCode: status7.OK,
+    success: true,
+    message: "Token refreshed successfully",
+    data: result
+  });
+});
+var googleSignIn = catchAsync(async (req, res) => {
+  const callbackUrl = typeof req.query.callbackUrl === "string" ? req.query.callbackUrl : envVariables.FRONTEND_URL;
+  res.redirect(
+    status7.TEMPORARY_REDIRECT,
+    AuthService.getGoogleSignInUrl(callbackUrl)
+  );
+});
+var googleSignInUrl = catchAsync(async (req, res) => {
+  const callbackUrl = typeof req.query.callbackUrl === "string" ? req.query.callbackUrl : envVariables.FRONTEND_URL;
+  sendResponse(res, {
+    statusCode: status7.OK,
+    success: true,
+    message: "Google sign-in URL generated successfully",
+    data: {
+      url: AuthService.getGoogleSignInUrl(callbackUrl)
+    }
+  });
+});
+var googleCallback = catchAsync(async (req, res) => {
+  const sessionToken = typeof req.cookies["better-auth.session_token"] === "string" ? req.cookies["better-auth.session_token"] : void 0;
+  if (!sessionToken) {
+    throw new AppError_default(status7.UNAUTHORIZED, "Session token is required");
+  }
+  const result = await AuthService.completeSocialLogin(sessionToken);
+  tokenUtils.setAccessTokenCookie(res, result.accessToken);
+  tokenUtils.setRefreshTokenCookie(res, result.refreshToken);
+  tokenUtils.setBetterAuthSessionCookie(res, result.sessionToken);
+  const redirectTo = typeof req.query.redirectTo === "string" ? req.query.redirectTo : envVariables.FRONTEND_URL;
+  res.redirect(status7.TEMPORARY_REDIRECT, redirectTo);
+});
+var me = catchAsync(async (req, res) => {
+  if (!req.user?.id) {
+    throw new AppError_default(status7.UNAUTHORIZED, "Unauthorized");
+  }
+  const result = await AuthService.getCurrentUser(req.user.id);
+  sendResponse(res, {
+    statusCode: status7.OK,
+    success: true,
+    message: "Current user fetched successfully",
+    data: result
+  });
+});
+var changePassword2 = catchAsync(async (req, res) => {
+  if (!req.user?.id) {
+    throw new AppError_default(status7.UNAUTHORIZED, "Unauthorized");
+  }
+  const result = await AuthService.changePassword(
+    req.user.id,
+    req.body,
+    typeof req.cookies["better-auth.session_token"] === "string" ? req.cookies["better-auth.session_token"] : void 0
+  );
+  tokenUtils.setAccessTokenCookie(res, result.accessToken);
+  tokenUtils.setRefreshTokenCookie(res, result.refreshToken);
+  if (result.sessionToken) {
+    tokenUtils.setBetterAuthSessionCookie(res, result.sessionToken);
+  }
+  sendResponse(res, {
+    statusCode: status7.OK,
+    success: true,
+    message: "Password changed successfully",
+    data: result
+  });
+});
+var logout2 = catchAsync(async (req, res) => {
+  await AuthService.logout(
+    typeof req.cookies["better-auth.session_token"] === "string" ? req.cookies["better-auth.session_token"] : void 0
+  );
+  tokenUtils.clearAuthCookies(res);
+  sendResponse(res, {
+    statusCode: status7.OK,
+    success: true,
+    message: "User logged out successfully"
+  });
+});
+var verifyEmail2 = catchAsync(async (req, res) => {
+  await AuthService.verifyEmail(req.body);
+  sendResponse(res, {
+    statusCode: status7.OK,
+    success: true,
+    message: "Email verified successfully"
+  });
+});
+var forgotPassword2 = catchAsync(async (req, res) => {
+  await AuthService.forgotPassword(req.body);
+  sendResponse(res, {
+    statusCode: status7.OK,
+    success: true,
+    message: "Password reset OTP sent successfully"
+  });
+});
+var resetPassword2 = catchAsync(async (req, res) => {
+  await AuthService.resetPassword(req.body);
+  sendResponse(res, {
+    statusCode: status7.OK,
+    success: true,
+    message: "Password reset successfully"
+  });
+});
+var AuthController = {
+  register: register2,
+  login: login2,
+  refreshToken,
+  googleSignIn,
+  googleSignInUrl,
+  googleCallback,
+  me,
+  changePassword: changePassword2,
+  logout: logout2,
+  verifyEmail: verifyEmail2,
+  forgotPassword: forgotPassword2,
+  resetPassword: resetPassword2
+};
+
+// src/app/modules/auth/auth.validation.ts
+import z3 from "zod";
+var AuthValidation = {
+  register: z3.object({
+    body: z3.object({
+      name: z3.string().min(2),
+      email: z3.email(),
+      password: z3.string().min(6)
+    }).strict()
+  }),
+  login: z3.object({
+    body: z3.object({
+      email: z3.email(),
+      password: z3.string().min(6)
+    })
+  }),
+  refreshToken: z3.object({
+    body: z3.object({
+      refreshToken: z3.string().optional()
+    })
+  }),
+  changePassword: z3.object({
+    body: z3.object({
+      currentPassword: z3.string().min(6),
+      newPassword: z3.string().min(6)
+    })
+  }),
+  verifyEmail: z3.object({
+    body: z3.object({
+      email: z3.email(),
+      otp: z3.string().length(6)
+    })
+  }),
+  forgotPassword: z3.object({
+    body: z3.object({
+      email: z3.email()
+    })
+  }),
+  resetPassword: z3.object({
+    body: z3.object({
+      email: z3.email(),
+      otp: z3.string().length(6),
+      newPassword: z3.string().min(6)
+    })
+  })
+};
+
+// src/app/modules/auth/auth.route.ts
+var router2 = Router2();
+router2.post(
+  "/register",
+  validateRequest(AuthValidation.register),
+  AuthController.register
+);
+router2.post("/login", validateRequest(AuthValidation.login), AuthController.login);
+router2.get("/google", AuthController.googleSignIn);
+router2.get("/google/url", AuthController.googleSignInUrl);
+router2.get("/google/callback", AuthController.googleCallback);
+router2.post(
+  "/refresh-token",
+  validateRequest(AuthValidation.refreshToken),
+  AuthController.refreshToken
+);
+router2.get("/me", checkAuth("MEMBER", "ADMIN"), AuthController.me);
+router2.post(
+  "/change-password",
+  checkAuth("MEMBER", "ADMIN"),
+  validateRequest(AuthValidation.changePassword),
+  AuthController.changePassword
+);
+router2.post("/logout", checkAuth("MEMBER", "ADMIN"), AuthController.logout);
+router2.post(
+  "/verify-email",
+  validateRequest(AuthValidation.verifyEmail),
+  AuthController.verifyEmail
+);
+router2.post(
+  "/forgot-password",
+  validateRequest(AuthValidation.forgotPassword),
+  AuthController.forgotPassword
+);
+router2.post(
+  "/reset-password",
+  validateRequest(AuthValidation.resetPassword),
+  AuthController.resetPassword
+);
+var AuthRoutes = router2;
+
+// src/app/modules/category/category.route.ts
+import { Router as Router3 } from "express";
+
+// src/app/modules/category/category.controller.ts
+import status8 from "http-status";
+
+// src/app/utils/QueryBuilder.ts
+var QueryBuilder = class {
+  constructor(query, initialWhere, initialOrderBy) {
+    this.query = query;
+    this.where = { ...initialWhere };
+    this.orderBy = { ...initialOrderBy };
+  }
+  where;
+  orderBy;
+  page = 1;
+  limit = 10;
+  skip = 0;
+  search(fields) {
+    const rawSearchTerm = this.query.searchTerm;
+    const searchTerm = Array.isArray(rawSearchTerm) ? rawSearchTerm[0] : rawSearchTerm;
+    if (!searchTerm) return this;
+    this.where = {
+      ...this.where,
+      OR: fields.map((field) => ({
+        [field]: { contains: searchTerm, mode: "insensitive" }
+      }))
+    };
+    return this;
+  }
+  filter(allowedFields) {
+    allowedFields.forEach((field) => {
+      const value = this.query[field];
+      if (value === void 0) return;
+      const normalizedValue = Array.isArray(value) ? value[0] : value;
+      this.where = {
+        ...this.where,
+        [field]: normalizedValue
+      };
+    });
+    return this;
+  }
+  mapFilter(field, mapper) {
+    const value = this.query[field];
+    if (value === void 0) return this;
+    const normalizedValue = Array.isArray(value) ? value[0] : value;
+    this.where = {
+      ...this.where,
+      [field]: mapper(normalizedValue)
+    };
+    return this;
+  }
+  sort(defaultField, defaultOrder = "desc") {
+    const rawSortBy = this.query.sortBy;
+    const rawSortOrder = this.query.sortOrder;
+    const sortBy = Array.isArray(rawSortBy) ? rawSortBy[0] : rawSortBy;
+    const sortOrder = Array.isArray(rawSortOrder) ? rawSortOrder[0] : rawSortOrder;
+    const order = sortOrder === "asc" ? "asc" : defaultOrder;
+    const field = sortBy || defaultField;
+    this.orderBy = {
+      [field]: order
+    };
+    return this;
+  }
+  paginate(defaultLimit = 10, maxLimit = 100) {
+    const rawPage = this.query.page;
+    const rawLimit = this.query.limit;
+    const parsedPage = Number(Array.isArray(rawPage) ? rawPage[0] : rawPage);
+    const parsedLimit = Number(
+      Array.isArray(rawLimit) ? rawLimit[0] : rawLimit
+    );
+    this.page = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+    this.limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, maxLimit) : defaultLimit;
+    this.skip = (this.page - 1) * this.limit;
+    return this;
+  }
+  build() {
+    return {
+      where: this.where,
+      orderBy: this.orderBy,
+      page: this.page,
+      limit: this.limit,
+      skip: this.skip
+    };
+  }
+};
+
+// src/app/modules/category/category.service.ts
+var create = async (payload) => {
+  const existingCategory = await prisma.category.findFirst({
+    where: {
+      name: {
+        equals: payload.name,
+        mode: "insensitive"
+      }
+    },
+    select: { id: true }
+  });
+  if (existingCategory) {
+    throw new AppError_default(
+      409,
+      "Category already exists. Try another category name."
+    );
+  }
+  return prisma.category.create({ data: payload });
+};
+var getAll = async (query) => {
+  const queryBuilder = new QueryBuilder(
+    query,
+    {},
+    { createdAt: "desc" }
+  ).search(["name", "description"]).sort("createdAt", "desc").paginate(20, 100);
+  const { where, orderBy, skip, limit, page } = queryBuilder.build();
+  const [total, data] = await Promise.all([
+    prisma.category.count({ where }),
+    prisma.category.findMany({
+      where,
+      orderBy,
+      skip,
+      take: limit
+    })
+  ]);
+  return { meta: { page, limit, total }, data };
+};
+var update = async (id, payload) => {
+  if (payload.name) {
+    const existingCategory = await prisma.category.findFirst({
+      where: {
+        id: { not: id },
+        name: {
+          equals: payload.name,
+          mode: "insensitive"
+        }
+      },
+      select: { id: true }
+    });
+    if (existingCategory) {
+      throw new AppError_default(
+        409,
+        "Category already exists. Try another category name."
+      );
+    }
+  }
+  return prisma.category.update({
+    where: { id },
+    data: payload
+  });
+};
+var remove = async (id) => {
+  return prisma.category.delete({ where: { id } });
+};
+var CategoryService = {
+  create,
+  getAll,
+  update,
+  remove
+};
+
+// src/app/modules/category/category.controller.ts
+var create2 = catchAsync(async (req, res) => {
+  const result = await CategoryService.create(req.body);
+  sendResponse(res, {
+    statusCode: status8.CREATED,
+    success: true,
+    message: "Category created successfully",
+    data: result
+  });
+});
+var getAll2 = catchAsync(async (req, res) => {
+  const result = await CategoryService.getAll(req.query);
+  sendResponse(res, {
+    statusCode: status8.OK,
+    success: true,
+    message: "Categories fetched successfully",
+    meta: result.meta,
+    data: result.data
+  });
+});
+var update2 = catchAsync(async (req, res) => {
+  const result = await CategoryService.update(String(req.params.id), req.body);
+  sendResponse(res, {
+    statusCode: status8.OK,
+    success: true,
+    message: "Category updated successfully",
+    data: result
+  });
+});
+var remove2 = catchAsync(async (req, res) => {
+  const result = await CategoryService.remove(String(req.params.id));
+  sendResponse(res, {
+    statusCode: status8.OK,
+    success: true,
+    message: "Category deleted successfully",
+    data: result
+  });
+});
+var CategoryController = {
+  create: create2,
+  getAll: getAll2,
+  update: update2,
+  remove: remove2
+};
+
+// src/app/modules/category/category.validation.ts
+import z4 from "zod";
+var create3 = z4.object({
+  body: z4.object({
+    name: z4.string().min(2).max(60),
+    description: z4.string().max(500).optional()
+  })
+});
+var update3 = z4.object({
+  body: z4.object({
+    name: z4.string().min(2).max(60).optional(),
+    description: z4.string().max(500).optional()
+  })
+});
+var CategoryValidation = {
+  create: create3,
+  update: update3
+};
+
+// src/app/modules/category/category.route.ts
+var router3 = Router3();
+router3.get("/", CategoryController.getAll);
+router3.post(
+  "/",
+  checkAuth("ADMIN"),
+  validateRequest(CategoryValidation.create),
+  CategoryController.create
+);
+router3.patch(
+  "/:id",
+  checkAuth("ADMIN"),
+  validateRequest(CategoryValidation.update),
+  CategoryController.update
+);
+router3.delete("/:id", checkAuth("ADMIN"), CategoryController.remove);
+var CategoryRoutes = router3;
+
+// src/app/modules/comment/comment.route.ts
+import { Router as Router4 } from "express";
+
+// src/app/modules/comment/comment.controller.ts
+import status9 from "http-status";
+
+// src/app/modules/comment/comment.service.ts
+var buildCommentTree = (comments) => {
+  const commentMap = /* @__PURE__ */ new Map();
+  const rootComments = [];
+  for (const comment of comments) {
+    commentMap.set(comment.id, {
+      ...comment,
+      replies: []
+    });
+  }
+  for (const comment of commentMap.values()) {
+    if (comment.parentId) {
+      const parent = commentMap.get(comment.parentId);
+      if (parent) {
+        parent.replies.push(comment);
+        continue;
+      }
+    }
+    rootComments.push(comment);
+  }
+  return rootComments;
+};
+var create4 = async (userId, payload) => {
+  if (payload.parentId) {
+    const parent = await prisma.ideaComment.findUnique({
+      where: { id: payload.parentId },
+      select: { id: true, ideaId: true, isDeleted: true }
+    });
+    if (!parent || parent.ideaId !== payload.ideaId || parent.isDeleted) {
+      throw new AppError_default(400, "Invalid parent comment for this idea");
+    }
+  }
+  return prisma.ideaComment.create({
+    data: {
+      userId,
+      ideaId: payload.ideaId,
+      content: payload.content,
+      parentId: payload.parentId
+    }
+  });
+};
+var listByIdea = async (ideaId) => {
+  const comments = await prisma.ideaComment.findMany({
+    where: {
+      ideaId,
+      isDeleted: false
+    },
+    orderBy: {
+      createdAt: "asc"
+    },
+    include: {
+      user: {
+        select: { id: true, name: true, email: true }
+      }
+    }
+  });
+  return buildCommentTree(comments);
+};
+var remove3 = async (id, user) => {
+  const comment = await prisma.ideaComment.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      userId: true
+    }
+  });
+  if (!comment) throw new AppError_default(404, "Comment not found");
+  if (user.role !== "ADMIN" && comment.userId !== user.id) {
+    throw new AppError_default(403, "Forbidden");
+  }
+  return prisma.ideaComment.update({
+    where: { id },
+    data: { isDeleted: true }
+  });
+};
+var CommentService = {
+  create: create4,
+  listByIdea,
+  remove: remove3
+};
+
+// src/app/modules/comment/comment.controller.ts
+var create5 = catchAsync(async (req, res) => {
+  if (!req.user?.id) throw new AppError_default(status9.UNAUTHORIZED, "Unauthorized");
+  const result = await CommentService.create(req.user.id, req.body);
+  sendResponse(res, {
+    statusCode: status9.CREATED,
+    success: true,
+    message: "Comment added successfully",
+    data: result
+  });
+});
+var listByIdea2 = catchAsync(async (req, res) => {
+  const result = await CommentService.listByIdea(String(req.params.ideaId));
+  sendResponse(res, {
+    statusCode: status9.OK,
+    success: true,
+    message: "Comments fetched successfully",
+    data: result
+  });
+});
+var remove4 = catchAsync(async (req, res) => {
+  if (!req.user) throw new AppError_default(status9.UNAUTHORIZED, "Unauthorized");
+  const result = await CommentService.remove(String(req.params.id), req.user);
+  sendResponse(res, {
+    statusCode: status9.OK,
+    success: true,
+    message: "Comment deleted successfully",
+    data: result
+  });
+});
+var CommentController = {
+  create: create5,
+  listByIdea: listByIdea2,
+  remove: remove4
+};
+
+// src/app/modules/comment/comment.validation.ts
+import z5 from "zod";
+var create6 = z5.object({
+  body: z5.object({
+    ideaId: z5.string().min(1),
+    content: z5.string().min(1).max(2e3),
+    parentId: z5.string().optional()
+  })
+});
+var CommentValidation = {
+  create: create6
+};
+
+// src/app/modules/comment/comment.route.ts
+var router4 = Router4();
+router4.get("/idea/:ideaId", CommentController.listByIdea);
+router4.post(
+  "/",
+  checkAuth("MEMBER", "ADMIN"),
+  validateRequest(CommentValidation.create),
+  CommentController.create
+);
+router4.delete("/:id", checkAuth("MEMBER", "ADMIN"), CommentController.remove);
+var CommentRoutes = router4;
+
+// src/app/modules/idea/idea.route.ts
+import { Router as Router5 } from "express";
+
+// src/app/modules/idea/idea.controller.ts
+import status10 from "http-status";
+
+// src/app/modules/idea/idea.service.ts
+var shapeIdea = (idea) => {
+  const upvotes = idea.votes.filter((v) => v.type === VoteType.UPVOTE).length;
+  const downvotes = idea.votes.filter((v) => v.type === VoteType.DOWNVOTE).length;
+  return {
+    ...idea,
+    upvotes,
+    downvotes,
+    commentCount: idea._count.comments,
+    voteCount: idea._count.votes
+  };
+};
+var resolveIsPaidFilter = (value) => {
+  const normalizedValue = value.trim().toUpperCase();
+  if (["PAID", "TRUE", "1"].includes(normalizedValue)) {
+    return true;
+  }
+  if (["FREE", "FALSE", "0"].includes(normalizedValue)) {
+    return false;
+  }
+  throw new AppError_default(
+    400,
+    "Invalid payment filter. Use PAID, FREE, true, or false"
+  );
+};
+var create7 = async (authorId, payload) => {
+  if (payload.isPaid && (payload.price === void 0 || payload.price <= 0)) {
+    throw new AppError_default(400, "Paid idea must include price greater than 0");
+  }
+  return prisma.idea.create({
+    data: {
+      title: payload.title,
+      problemStatement: payload.problemStatement,
+      proposedSolution: payload.proposedSolution,
+      description: payload.description,
+      categoryId: payload.categoryId,
+      authorId,
+      isPaid: payload.isPaid ?? false,
+      price: payload.isPaid ? payload.price : null,
+      media: payload.mediaUrls?.length ? {
+        createMany: {
+          data: payload.mediaUrls.map((url) => ({ url }))
+        }
+      } : void 0
+    },
+    include: {
+      media: true
+    }
+  });
+};
+var getAll3 = async (query, user) => {
+  const normalizedSortBy = String(query.sortBy || "RECENT");
+  const prismaSortQuery = { ...query };
+  const rawStatus = Array.isArray(query.status) ? query.status[0] : query.status;
+  const rawIsPaid = Array.isArray(query.isPaid) ? query.isPaid[0] : query.isPaid;
+  const rawPaymentStatus = Array.isArray(query.paymentStatus) ? query.paymentStatus[0] : query.paymentStatus;
+  const normalizedStatus = typeof rawStatus === "string" ? rawStatus.toUpperCase() : void 0;
+  const isAdmin = user?.role === "ADMIN";
+  const baseWhere = isAdmin && normalizedStatus ? {
+    status: normalizedStatus
+  } : isAdmin ? {} : { status: IdeaStatus.APPROVED };
+  if (normalizedSortBy === "RECENT" || normalizedSortBy === "TOP_VOTED" || normalizedSortBy === "MOST_COMMENTED") {
+    prismaSortQuery.sortBy = "createdAt";
+  }
+  if (rawPaymentStatus !== void 0) {
+    prismaSortQuery.isPaid = rawPaymentStatus;
+  } else if (rawIsPaid !== void 0) {
+    prismaSortQuery.isPaid = rawIsPaid;
+  }
+  const queryBuilder = new QueryBuilder(
+    prismaSortQuery,
+    baseWhere,
+    { createdAt: "desc" }
+  ).search(["title", "description", "problemStatement", "proposedSolution"]).filter(["categoryId", "authorId"]).mapFilter("isPaid", resolveIsPaidFilter).sort("createdAt", "desc").paginate(10, 50);
+  const { where, orderBy, page, limit, skip } = queryBuilder.build();
+  const [total, ideas] = await Promise.all([
+    prisma.idea.count({ where }),
+    prisma.idea.findMany({
+      where,
+      skip,
+      take: limit,
+      orderBy,
+      include: {
+        category: true,
+        author: {
+          select: { id: true, name: true, email: true }
+        },
+        media: true,
+        votes: { select: { type: true } },
+        _count: {
+          select: {
+            comments: true,
+            votes: true
+          }
+        }
+      }
+    })
+  ]);
+  const minUpvotes = Number(query.minUpvotes || 0);
+  const sortBy = normalizedSortBy;
+  let shaped = ideas.map(shapeIdea).filter((idea) => idea.upvotes >= minUpvotes);
+  if (sortBy === "TOP_VOTED") {
+    shaped = shaped.sort((a, b) => b.upvotes - a.upvotes);
+  }
+  if (sortBy === "MOST_COMMENTED") {
+    shaped = shaped.sort((a, b) => b.commentCount - a.commentCount);
+  }
+  return {
+    meta: {
+      page,
+      limit,
+      total
+    },
+    data: shaped
+  };
+};
+var getById = async (id, user) => {
+  const idea = await prisma.idea.findUnique({
+    where: { id },
+    include: {
+      category: true,
+      author: { select: { id: true, name: true, email: true } },
+      media: true,
+      votes: { select: { type: true } },
+      _count: { select: { comments: true, votes: true } }
+    }
+  });
+  if (!idea) throw new AppError_default(404, "Idea not found");
+  const shaped = shapeIdea(idea);
+  const isOwner = user?.id === idea.authorId;
+  const isAdmin = user?.role === "ADMIN";
+  if (idea.status !== IdeaStatus.APPROVED && !isOwner && !isAdmin) {
+    throw new AppError_default(404, "Idea not found");
+  }
+  if (!idea.isPaid) {
+    return { ...shaped, canAccess: true };
+  }
+  if (isOwner || isAdmin) {
+    return { ...shaped, canAccess: true };
+  }
+  if (!user?.id) {
+    return {
+      id: idea.id,
+      title: idea.title,
+      isPaid: true,
+      price: idea.price,
+      category: idea.category,
+      author: idea.author,
+      createdAt: idea.createdAt,
+      canAccess: false,
+      lockReason: "Login and purchase required"
+    };
+  }
+  const purchase = await prisma.ideaPurchase.findFirst({
+    where: {
+      ideaId: id,
+      userId: user.id,
+      status: PurchaseStatus.PAID
+    }
+  });
+  if (!purchase) {
+    return {
+      id: idea.id,
+      title: idea.title,
+      isPaid: true,
+      price: idea.price,
+      category: idea.category,
+      author: idea.author,
+      createdAt: idea.createdAt,
+      canAccess: false,
+      lockReason: "Purchase required"
+    };
+  }
+  return { ...shaped, canAccess: true };
+};
+var update4 = async (id, userId, payload) => {
+  const idea = await prisma.idea.findUnique({ where: { id } });
+  if (!idea) throw new AppError_default(404, "Idea not found");
+  if (idea.authorId !== userId) throw new AppError_default(403, "Forbidden");
+  if (idea.status === IdeaStatus.APPROVED) {
+    throw new AppError_default(400, "Published ideas cannot be edited");
+  }
+  if (payload.isPaid && (payload.price === void 0 || payload.price <= 0)) {
+    throw new AppError_default(400, "Paid idea must include price greater than 0");
+  }
+  return prisma.idea.update({
+    where: { id },
+    data: {
+      ...payload,
+      price: payload.isPaid ? payload.price : payload.isPaid === false ? null : payload.price,
+      media: payload.mediaUrls ? {
+        deleteMany: {},
+        createMany: {
+          data: payload.mediaUrls.map((url) => ({ url }))
+        }
+      } : void 0
+    },
+    include: {
+      media: true
+    }
+  });
+};
+var remove5 = async (id, userId) => {
+  const idea = await prisma.idea.findUnique({ where: { id } });
+  if (!idea) throw new AppError_default(404, "Idea not found");
+  if (idea.authorId !== userId) throw new AppError_default(403, "Forbidden");
+  if (idea.status === IdeaStatus.APPROVED) {
+    throw new AppError_default(400, "Published ideas cannot be deleted");
+  }
+  return prisma.idea.delete({ where: { id } });
+};
+var submitForReview = async (id, userId) => {
+  const idea = await prisma.idea.findUnique({ where: { id } });
+  if (!idea) throw new AppError_default(404, "Idea not found");
+  if (idea.authorId !== userId) throw new AppError_default(403, "Forbidden");
+  if (idea.status === IdeaStatus.UNDER_REVIEW) {
+    throw new AppError_default(400, "Idea is already under review");
+  }
+  if (idea.status === IdeaStatus.APPROVED) {
+    throw new AppError_default(400, "Approved ideas do not need to be resubmitted");
+  }
+  return prisma.idea.update({
+    where: { id },
+    data: {
+      status: IdeaStatus.UNDER_REVIEW,
+      submittedAt: /* @__PURE__ */ new Date(),
+      approvedAt: null,
+      rejectionReason: null
+    }
+  });
+};
+var review = async (id, payload) => {
+  const idea = await prisma.idea.findUnique({ where: { id } });
+  if (!idea) throw new AppError_default(404, "Idea not found");
+  if (idea.status !== IdeaStatus.UNDER_REVIEW) {
+    throw new AppError_default(400, "Only ideas under review can be approved or rejected");
+  }
+  if (payload.action === "REJECT" && !payload.rejectionReason) {
+    throw new AppError_default(400, "Rejection reason is required for rejected ideas");
+  }
+  return prisma.idea.update({
+    where: { id },
+    data: payload.action === "APPROVE" ? {
+      status: IdeaStatus.APPROVED,
+      approvedAt: /* @__PURE__ */ new Date(),
+      rejectionReason: null
+    } : {
+      status: IdeaStatus.REJECTED,
+      approvedAt: null,
+      rejectionReason: payload.rejectionReason
+    }
+  });
+};
+var getMine = async (userId) => {
+  return prisma.idea.findMany({
+    where: {
+      authorId: userId
+    },
+    orderBy: {
+      createdAt: "desc"
+    },
+    include: {
+      category: true,
+      media: true,
+      _count: {
+        select: {
+          comments: true,
+          votes: true
+        }
+      }
+    }
+  });
+};
+var IdeaService = {
+  create: create7,
+  getAll: getAll3,
+  getById,
+  update: update4,
+  remove: remove5,
+  submitForReview,
+  review,
+  getMine
+};
+
+// src/app/modules/idea/idea.controller.ts
+var create8 = catchAsync(async (req, res) => {
+  if (!req.user?.id) throw new AppError_default(status10.UNAUTHORIZED, "Unauthorized");
+  const result = await IdeaService.create(req.user.id, req.body);
+  sendResponse(res, {
+    statusCode: status10.CREATED,
+    success: true,
+    message: "Idea created successfully",
+    data: result
+  });
+});
+var getAll4 = catchAsync(async (req, res) => {
+  const result = await IdeaService.getAll(req.query, req.user);
+  sendResponse(res, {
+    statusCode: status10.OK,
+    success: true,
+    message: "Ideas fetched successfully",
+    data: result.data,
+    meta: result.meta
+  });
+});
+var getById2 = catchAsync(async (req, res) => {
+  const result = await IdeaService.getById(String(req.params.id), req.user);
+  sendResponse(res, {
+    statusCode: status10.OK,
+    success: true,
+    message: "Idea fetched successfully",
+    data: result
+  });
+});
+var update5 = catchAsync(async (req, res) => {
+  if (!req.user?.id) throw new AppError_default(status10.UNAUTHORIZED, "Unauthorized");
+  const result = await IdeaService.update(String(req.params.id), req.user.id, req.body);
+  sendResponse(res, {
+    statusCode: status10.OK,
+    success: true,
+    message: "Idea updated successfully",
+    data: result
+  });
+});
+var remove6 = catchAsync(async (req, res) => {
+  if (!req.user?.id) throw new AppError_default(status10.UNAUTHORIZED, "Unauthorized");
+  const result = await IdeaService.remove(String(req.params.id), req.user.id);
+  sendResponse(res, {
+    statusCode: status10.OK,
+    success: true,
+    message: "Idea deleted successfully",
+    data: result
+  });
+});
+var submitForReview2 = catchAsync(async (req, res) => {
+  if (!req.user?.id) throw new AppError_default(status10.UNAUTHORIZED, "Unauthorized");
+  const result = await IdeaService.submitForReview(String(req.params.id), req.user.id);
+  sendResponse(res, {
+    statusCode: status10.OK,
+    success: true,
+    message: "Idea submitted for review successfully",
+    data: result
+  });
+});
+var review2 = catchAsync(async (req, res) => {
+  const result = await IdeaService.review(String(req.params.id), req.body);
+  sendResponse(res, {
+    statusCode: status10.OK,
+    success: true,
+    message: "Idea review action completed",
+    data: result
+  });
+});
+var getMine2 = catchAsync(async (req, res) => {
+  if (!req.user?.id) throw new AppError_default(status10.UNAUTHORIZED, "Unauthorized");
+  const result = await IdeaService.getMine(req.user.id);
+  sendResponse(res, {
+    statusCode: status10.OK,
+    success: true,
+    message: "My ideas fetched successfully",
+    data: result
+  });
+});
+var IdeaController = {
+  create: create8,
+  getAll: getAll4,
+  getById: getById2,
+  update: update5,
+  remove: remove6,
+  submitForReview: submitForReview2,
+  review: review2,
+  getMine: getMine2
+};
+
+// src/app/modules/idea/idea.validation.ts
+import z6 from "zod";
+var create9 = z6.object({
+  body: z6.object({
+    title: z6.string().min(3).max(180),
+    problemStatement: z6.string().min(10),
+    proposedSolution: z6.string().min(10),
+    description: z6.string().min(10),
+    categoryId: z6.string().min(1),
+    isPaid: z6.boolean().optional(),
+    price: z6.number().nonnegative().optional(),
+    mediaUrls: z6.array(z6.url()).optional()
+  })
+});
+var update6 = z6.object({
+  body: z6.object({
+    title: z6.string().min(3).max(180).optional(),
+    problemStatement: z6.string().min(10).optional(),
+    proposedSolution: z6.string().min(10).optional(),
+    description: z6.string().min(10).optional(),
+    categoryId: z6.string().min(1).optional(),
+    isPaid: z6.boolean().optional(),
+    price: z6.number().nonnegative().optional(),
+    mediaUrls: z6.array(z6.url()).optional()
+  })
+});
+var review3 = z6.object({
+  body: z6.object({
+    action: z6.enum(["APPROVE", "REJECT"]),
+    rejectionReason: z6.string().min(3).max(500).optional()
+  })
+});
+var IdeaValidation = {
+  create: create9,
+  update: update6,
+  review: review3
+};
+
+// src/app/modules/idea/idea.route.ts
+var router5 = Router5();
+router5.get("/", IdeaController.getAll);
+router5.get("/mine", checkAuth("MEMBER", "ADMIN"), IdeaController.getMine);
+router5.get("/:id", IdeaController.getById);
+router5.post(
+  "/",
+  checkAuth("MEMBER", "ADMIN"),
+  validateRequest(IdeaValidation.create),
+  IdeaController.create
+);
+router5.patch(
+  "/:id",
+  checkAuth("MEMBER", "ADMIN"),
+  validateRequest(IdeaValidation.update),
+  IdeaController.update
+);
+router5.delete("/:id", checkAuth("MEMBER", "ADMIN"), IdeaController.remove);
+router5.patch(
+  "/:id/submit",
+  checkAuth("MEMBER", "ADMIN"),
+  IdeaController.submitForReview
+);
+router5.patch(
+  "/:id/review",
+  checkAuth("ADMIN"),
+  validateRequest(IdeaValidation.review),
+  IdeaController.review
+);
+var IdeaRoutes = router5;
+
+// src/app/modules/newsletter/newsletter.route.ts
+import { Router as Router6 } from "express";
+
+// src/app/modules/newsletter/newsletter.controller.ts
+import status11 from "http-status";
+
+// src/app/modules/newsletter/newsletter.service.ts
+var subscribe = async (email) => {
+  return prisma.newsletterSubscriber.upsert({
+    where: { email },
+    create: { email, subscribed: true },
+    update: { subscribed: true, subscribedAt: /* @__PURE__ */ new Date() }
+  });
+};
+var unsubscribe = async (email) => {
+  return prisma.newsletterSubscriber.update({
+    where: { email },
+    data: { subscribed: false }
+  });
+};
+var getAll5 = async () => {
+  return prisma.newsletterSubscriber.findMany({
+    orderBy: { createdAt: "desc" }
+  });
+};
+var NewsletterService = {
+  subscribe,
+  unsubscribe,
+  getAll: getAll5
+};
+
+// src/app/modules/newsletter/newsletter.controller.ts
+var subscribe2 = catchAsync(async (req, res) => {
+  const result = await NewsletterService.subscribe(req.body.email);
+  sendResponse(res, {
+    statusCode: status11.OK,
+    success: true,
+    message: "Subscribed successfully",
+    data: result
+  });
+});
+var unsubscribe2 = catchAsync(async (req, res) => {
+  const result = await NewsletterService.unsubscribe(String(req.params.email));
+  sendResponse(res, {
+    statusCode: status11.OK,
+    success: true,
+    message: "Unsubscribed successfully",
+    data: result
+  });
+});
+var getAll6 = catchAsync(async (_req, res) => {
+  const result = await NewsletterService.getAll();
+  sendResponse(res, {
+    statusCode: status11.OK,
+    success: true,
+    message: "Subscribers fetched successfully",
+    data: result
+  });
+});
+var NewsletterController = {
+  subscribe: subscribe2,
+  unsubscribe: unsubscribe2,
+  getAll: getAll6
+};
+
+// src/app/modules/newsletter/newsletter.validation.ts
+import z7 from "zod";
+var subscribe3 = z7.object({
+  body: z7.object({
+    email: z7.string().email()
+  })
+});
+var NewsletterValidation = {
+  subscribe: subscribe3
+};
+
+// src/app/modules/newsletter/newsletter.route.ts
+var router6 = Router6();
+router6.post(
+  "/subscribe",
+  validateRequest(NewsletterValidation.subscribe),
+  NewsletterController.subscribe
+);
+router6.patch("/unsubscribe/:email", NewsletterController.unsubscribe);
+router6.get("/", checkAuth("ADMIN"), NewsletterController.getAll);
+var NewsletterRoutes = router6;
+
+// src/app/modules/payment/payment.route.ts
+import { Router as Router7 } from "express";
+
+// src/app/modules/payment/payment.controller.ts
+import status12 from "http-status";
+
+// src/app/modules/payment/payment.service.ts
+import Stripe from "stripe";
+var toStripeAmount = (amount) => Math.round(amount * 100);
+var getStripeClient = () => {
+  if (!envVariables.STRIPE.STRIPE_SECRET_KEY) {
+    throw new AppError_default(500, "Stripe secret key is not configured");
+  }
+  return new Stripe(envVariables.STRIPE.STRIPE_SECRET_KEY);
+};
+var getBackendBaseUrl = () => {
+  return envVariables.BETTER_AUTH_URL || `http://localhost:${envVariables.PORT}`;
+};
+var createStripeCheckoutSession = async (payload) => {
+  const stripe = getStripeClient();
+  const currency = payload.currency.toLowerCase();
+  const session = await stripe.checkout.sessions.create({
+    mode: "payment",
+    customer_email: payload.userEmail,
+    payment_method_types: ["card"],
+    line_items: [
+      {
+        quantity: 1,
+        price_data: {
+          currency,
+          unit_amount: toStripeAmount(payload.amount),
+          product_data: {
+            name: `Paid Idea Access: ${payload.ideaTitle}`
+          }
+        }
+      }
+    ],
+    metadata: {
+      purchaseId: payload.purchaseId
+    },
+    success_url: `${getBackendBaseUrl()}/api/v1/payments/stripe/success?session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${getBackendBaseUrl()}/api/v1/payments/stripe/cancel?purchaseId=${payload.purchaseId}`
+  });
+  if (!session.url) {
+    throw new AppError_default(500, "Failed to generate Stripe checkout URL");
+  }
+  return {
+    sessionId: session.id,
+    checkoutUrl: session.url
+  };
+};
+var createCheckoutForPurchase = async (purchaseId, userId) => {
+  const purchase = await prisma.ideaPurchase.findUnique({
+    where: { id: purchaseId },
+    include: {
+      idea: {
+        select: {
+          title: true,
+          isPaid: true
+        }
+      },
+      user: {
+        select: {
+          email: true
+        }
+      }
+    }
+  });
+  if (!purchase) throw new AppError_default(404, "Purchase not found");
+  if (purchase.userId !== userId) throw new AppError_default(403, "Forbidden");
+  if (purchase.status === PurchaseStatus.PAID) {
+    throw new AppError_default(400, "This purchase is already paid");
+  }
+  if (!purchase.idea.isPaid) {
+    throw new AppError_default(400, "This idea does not require payment");
+  }
+  const checkout = await createStripeCheckoutSession({
+    purchaseId: purchase.id,
+    ideaTitle: purchase.idea.title,
+    userEmail: purchase.user.email,
+    amount: Number(purchase.amount),
+    currency: purchase.currency
+  });
+  const updatedPurchase = await prisma.ideaPurchase.update({
+    where: { id: purchase.id },
+    data: {
+      paymentProvider: "STRIPE",
+      transactionId: checkout.sessionId,
+      status: PurchaseStatus.PENDING
+    }
+  });
+  return {
+    purchase: updatedPurchase,
+    payment: {
+      provider: "STRIPE",
+      checkoutUrl: checkout.checkoutUrl,
+      sessionId: checkout.sessionId
+    }
+  };
+};
+var getPurchaseStatus = async (purchaseId, userId) => {
+  const purchase = await prisma.ideaPurchase.findUnique({
+    where: { id: purchaseId },
+    include: {
+      idea: {
+        select: {
+          id: true,
+          title: true,
+          isPaid: true,
+          price: true
+        }
+      }
+    }
+  });
+  if (!purchase) throw new AppError_default(404, "Purchase not found");
+  if (purchase.userId !== userId) throw new AppError_default(403, "Forbidden");
+  return purchase;
+};
+var confirmPayment = async (purchaseId, transactionId) => {
+  const purchase = await prisma.ideaPurchase.findUnique({
+    where: { id: purchaseId }
+  });
+  if (!purchase) throw new AppError_default(404, "Purchase not found");
+  if (purchase.status === PurchaseStatus.PAID) {
+    return purchase;
+  }
+  return prisma.ideaPurchase.update({
+    where: { id: purchaseId },
+    data: {
+      status: PurchaseStatus.PAID,
+      transactionId,
+      purchasedAt: /* @__PURE__ */ new Date()
+    }
+  });
+};
+var markPaymentFailed = async (purchaseId, transactionId) => {
+  const purchase = await prisma.ideaPurchase.findUnique({
+    where: { id: purchaseId }
+  });
+  if (!purchase) throw new AppError_default(404, "Purchase not found");
+  if (purchase.status === PurchaseStatus.PAID) {
+    return purchase;
+  }
+  return prisma.ideaPurchase.update({
+    where: { id: purchaseId },
+    data: {
+      status: PurchaseStatus.FAILED,
+      transactionId: transactionId || purchase.transactionId
+    }
+  });
+};
+var confirmStripeSession = async (sessionId) => {
+  const stripe = getStripeClient();
+  const session = await stripe.checkout.sessions.retrieve(sessionId);
+  const purchaseId = session.metadata?.purchaseId;
+  if (!purchaseId) {
+    throw new AppError_default(400, "Invalid Stripe session metadata");
+  }
+  if (session.payment_status === "paid") {
+    const transactionId = typeof session.payment_intent === "string" ? session.payment_intent : session.id;
+    return confirmPayment(purchaseId, transactionId);
+  }
+  return markPaymentFailed(purchaseId, session.id);
+};
+var getPurchaseForTemplate = async (purchaseId) => {
+  const purchase = await prisma.ideaPurchase.findUnique({
+    where: { id: purchaseId },
+    include: {
+      idea: {
+        select: {
+          title: true
+        }
+      },
+      user: {
+        select: {
+          name: true,
+          email: true
+        }
+      }
+    }
+  });
+  if (!purchase) throw new AppError_default(404, "Purchase not found");
+  return purchase;
+};
+var verifyAndHandleWebhook = async (rawBody, signature) => {
+  if (!envVariables.STRIPE.STRIPE_WEBHOOK_SECRET) {
+    throw new AppError_default(500, "Stripe webhook secret is not configured");
+  }
+  const stripe = getStripeClient();
+  const event = stripe.webhooks.constructEvent(
+    rawBody,
+    signature,
+    envVariables.STRIPE.STRIPE_WEBHOOK_SECRET
+  );
+  if (event.type === "checkout.session.completed") {
+    const session = event.data.object;
+    const purchaseId = session.metadata?.purchaseId;
+    if (purchaseId) {
+      const transactionId = typeof session.payment_intent === "string" ? session.payment_intent : session.id;
+      await confirmPayment(purchaseId, transactionId);
+    }
+  }
+  if (event.type === "checkout.session.expired") {
+    const session = event.data.object;
+    const purchaseId = session.metadata?.purchaseId;
+    if (purchaseId) {
+      await markPaymentFailed(purchaseId, session.id);
+    }
+  }
+  return event;
+};
+var PaymentService = {
+  createStripeCheckoutSession,
+  createCheckoutForPurchase,
+  getPurchaseStatus,
+  confirmPayment,
+  markPaymentFailed,
+  confirmStripeSession,
+  getPurchaseForTemplate,
+  verifyAndHandleWebhook
+};
+
+// src/app/modules/payment/payment.controller.ts
+var confirm = catchAsync(async (req, res) => {
+  const result = await PaymentService.confirmPayment(
+    req.body.purchaseId,
+    req.body.transactionId
+  );
+  sendResponse(res, {
+    statusCode: status12.OK,
+    success: true,
+    message: "Payment confirmed successfully",
+    data: result
+  });
+});
+var statusById = catchAsync(async (req, res) => {
+  if (!req.user?.id) throw new AppError_default(status12.UNAUTHORIZED, "Unauthorized");
+  const result = await PaymentService.getPurchaseStatus(
+    String(req.params.purchaseId),
+    req.user.id
+  );
+  sendResponse(res, {
+    statusCode: status12.OK,
+    success: true,
+    message: "Payment status fetched successfully",
+    data: result
+  });
+});
+var createCheckout = catchAsync(async (req, res) => {
+  if (!req.user?.id) throw new AppError_default(status12.UNAUTHORIZED, "Unauthorized");
+  const result = await PaymentService.createCheckoutForPurchase(
+    String(req.params.purchaseId),
+    req.user.id
+  );
+  sendResponse(res, {
+    statusCode: status12.OK,
+    success: true,
+    message: "Checkout session created successfully",
+    data: result
+  });
+});
+var stripeSuccess = catchAsync(async (req, res) => {
+  const sessionId = String(req.query.session_id || "");
+  if (!sessionId) throw new AppError_default(status12.BAD_REQUEST, "session_id is required");
+  const purchase = await PaymentService.confirmStripeSession(sessionId);
+  const purchaseForTemplate = await PaymentService.getPurchaseForTemplate(purchase.id);
+  return res.status(status12.OK).render("payment", {
+    paymentStatus: purchaseForTemplate.status,
+    name: purchaseForTemplate.user.name || purchaseForTemplate.user.email,
+    ideaTitle: purchaseForTemplate.idea.title,
+    amount: purchaseForTemplate.amount.toString(),
+    currency: purchaseForTemplate.currency,
+    transactionId: purchaseForTemplate.transactionId || "N/A",
+    paymentProvider: purchaseForTemplate.paymentProvider,
+    paidAt: purchaseForTemplate.purchasedAt ? purchaseForTemplate.purchasedAt.toISOString() : "Pending"
+  });
+});
+var stripeCancel = catchAsync(async (req, res) => {
+  const purchaseId = String(req.query.purchaseId || "");
+  if (!purchaseId) throw new AppError_default(status12.BAD_REQUEST, "purchaseId is required");
+  await PaymentService.markPaymentFailed(purchaseId);
+  const purchaseForTemplate = await PaymentService.getPurchaseForTemplate(purchaseId);
+  return res.status(status12.OK).render("payment", {
+    paymentStatus: purchaseForTemplate.status,
+    name: purchaseForTemplate.user.name || purchaseForTemplate.user.email,
+    ideaTitle: purchaseForTemplate.idea.title,
+    amount: purchaseForTemplate.amount.toString(),
+    currency: purchaseForTemplate.currency,
+    transactionId: purchaseForTemplate.transactionId || "N/A",
+    paymentProvider: purchaseForTemplate.paymentProvider,
+    paidAt: purchaseForTemplate.purchasedAt ? purchaseForTemplate.purchasedAt.toISOString() : "Not paid yet"
+  });
+});
+var webhook = catchAsync(async (req, res) => {
+  const signature = req.headers["stripe-signature"];
+  if (typeof signature !== "string") {
+    throw new AppError_default(status12.BAD_REQUEST, "Missing stripe-signature header");
+  }
+  if (!req.rawBody) {
+    throw new AppError_default(status12.BAD_REQUEST, "Missing raw request body for webhook");
+  }
+  const event = await PaymentService.verifyAndHandleWebhook(req.rawBody, signature);
+  sendResponse(res, {
+    statusCode: status12.OK,
+    success: true,
+    message: "Webhook processed",
+    data: { id: event.id, type: event.type }
+  });
+});
+var PaymentController = {
+  confirm,
+  statusById,
+  createCheckout,
+  stripeSuccess,
+  stripeCancel,
+  webhook
+};
+
+// src/app/modules/payment/payment.validation.ts
+import z8 from "zod";
+var confirm2 = z8.object({
+  body: z8.object({
+    purchaseId: z8.string().min(1),
+    transactionId: z8.string().min(3)
+  })
+});
+var PaymentValidation = {
+  confirm: confirm2
+};
+
+// src/app/modules/payment/payment.route.ts
+var router7 = Router7();
+router7.post(
+  "/confirm",
+  checkAuth("MEMBER", "ADMIN"),
+  validateRequest(PaymentValidation.confirm),
+  PaymentController.confirm
+);
+router7.get("/stripe/success", PaymentController.stripeSuccess);
+router7.get("/stripe/cancel", PaymentController.stripeCancel);
+router7.post(
+  "/:purchaseId/checkout",
+  checkAuth("MEMBER", "ADMIN"),
+  PaymentController.createCheckout
+);
+router7.get(
+  "/:purchaseId/status",
+  checkAuth("MEMBER", "ADMIN"),
+  PaymentController.statusById
+);
+router7.post("/webhook", PaymentController.webhook);
+var PaymentRoutes = router7;
+
+// src/app/modules/purchase/purchase.route.ts
+import { Router as Router8 } from "express";
+
+// src/app/modules/purchase/purchase.controller.ts
+import status13 from "http-status";
+
+// src/app/modules/purchase/purchase.service.ts
+var create10 = async (user, payload) => {
+  const idea = await prisma.idea.findUnique({ where: { id: payload.ideaId } });
+  if (!idea) throw new AppError_default(404, "Idea not found");
+  if (!idea.isPaid || !idea.price) {
+    throw new AppError_default(400, "This is a free idea. Purchase not required.");
+  }
+  if (idea.authorId === user.id) {
+    throw new AppError_default(400, "Author does not need to purchase own idea");
+  }
+  const existingPurchase = await prisma.ideaPurchase.findUnique({
+    where: {
+      ideaId_userId: {
+        ideaId: payload.ideaId,
+        userId: user.id
+      }
+    }
+  });
+  if (existingPurchase?.status === PurchaseStatus.PAID) {
+    throw new AppError_default(400, "You already purchased this idea");
+  }
+  const paymentProvider = payload.paymentProvider || "STRIPE";
+  const purchase = existingPurchase ? await prisma.ideaPurchase.update({
+    where: { id: existingPurchase.id },
+    data: {
+      paymentProvider,
+      amount: idea.price,
+      currency: existingPurchase.currency || "BDT",
+      status: PurchaseStatus.PENDING,
+      transactionId: null,
+      purchasedAt: null
+    }
+  }) : await prisma.ideaPurchase.create({
+    data: {
+      ideaId: payload.ideaId,
+      userId: user.id,
+      amount: idea.price,
+      paymentProvider,
+      status: PurchaseStatus.PENDING
+    }
+  });
+  const checkout = await PaymentService.createStripeCheckoutSession({
+    purchaseId: purchase.id,
+    ideaTitle: idea.title,
+    userEmail: user.email,
+    amount: Number(idea.price),
+    currency: purchase.currency
+  });
+  const purchaseWithSession = await prisma.ideaPurchase.update({
+    where: { id: purchase.id },
+    data: {
+      transactionId: checkout.sessionId,
+      status: PurchaseStatus.PENDING
+    }
+  });
+  return {
+    purchase: purchaseWithSession,
+    payment: {
+      provider: "STRIPE",
+      checkoutUrl: checkout.checkoutUrl,
+      sessionId: checkout.sessionId
+    }
+  };
+};
+var getMine3 = async (userId) => {
+  return prisma.ideaPurchase.findMany({
+    where: { userId },
+    include: {
+      idea: {
+        select: {
+          id: true,
+          title: true,
+          isPaid: true,
+          price: true
+        }
+      }
+    },
+    orderBy: {
+      createdAt: "desc"
+    }
+  });
+};
+var PurchaseService = {
+  create: create10,
+  getMine: getMine3
+};
+
+// src/app/modules/purchase/purchase.controller.ts
+var create11 = catchAsync(async (req, res) => {
+  if (!req.user?.id) throw new AppError_default(status13.UNAUTHORIZED, "Unauthorized");
+  const result = await PurchaseService.create(
+    { id: req.user.id, email: req.user.email },
+    req.body
+  );
+  sendResponse(res, {
+    statusCode: status13.CREATED,
+    success: true,
+    message: "Purchase initialized successfully",
+    data: result
+  });
+});
+var getMine4 = catchAsync(async (req, res) => {
+  if (!req.user?.id) throw new AppError_default(status13.UNAUTHORIZED, "Unauthorized");
+  const result = await PurchaseService.getMine(req.user.id);
+  sendResponse(res, {
+    statusCode: status13.OK,
+    success: true,
+    message: "My purchases fetched successfully",
+    data: result
+  });
+});
+var PurchaseController = {
+  create: create11,
+  getMine: getMine4
+};
+
+// src/app/modules/purchase/purchase.validation.ts
+import z9 from "zod";
+var create12 = z9.object({
+  body: z9.object({
+    ideaId: z9.string().min(1),
+    paymentProvider: z9.enum(["STRIPE"]).optional()
+  })
+});
+var PurchaseValidation = {
+  create: create12
+};
+
+// src/app/modules/purchase/purchase.route.ts
+var router8 = Router8();
+router8.post(
+  "/",
+  checkAuth("MEMBER", "ADMIN"),
+  validateRequest(PurchaseValidation.create),
+  PurchaseController.create
+);
+router8.get("/me", checkAuth("MEMBER", "ADMIN"), PurchaseController.getMine);
+var PurchaseRoutes = router8;
+
+// src/app/modules/user/user.route.ts
+import { Router as Router9 } from "express";
+
+// src/app/modules/user/user.controller.ts
+import status14 from "http-status";
+
+// src/app/modules/user/user.service.ts
+var getAll7 = async (query) => {
+  const queryBuilder = new QueryBuilder(
+    query,
+    {},
+    { createdAt: "desc" }
+  ).search(["name", "email"]).filter(["role", "status"]).sort("createdAt", "desc").paginate(20, 100);
+  const { where, orderBy, skip, limit, page } = queryBuilder.build();
+  const [total, data] = await Promise.all([
+    prisma.user.count({ where }),
+    prisma.user.findMany({
+      where,
+      orderBy,
+      skip,
+      take: limit,
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        status: true,
+        emailVerified: true,
+        createdAt: true
+      }
+    })
+  ]);
+  return { meta: { page, limit, total }, data };
+};
+var getById3 = async (id) => {
+  const user = await prisma.user.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      role: true,
+      status: true,
+      image: true,
+      emailVerified: true,
+      createdAt: true
+    }
+  });
+  if (!user) throw new AppError_default(404, "User not found");
+  return user;
+};
+var update7 = async (id, payload) => {
+  return prisma.user.update({
+    where: { id },
+    data: payload
+  });
+};
+var UserService = {
+  getAll: getAll7,
+  getById: getById3,
+  update: update7
+};
+
+// src/app/modules/user/user.controller.ts
+var getAll8 = catchAsync(async (req, res) => {
+  const result = await UserService.getAll(req.query);
+  sendResponse(res, {
+    statusCode: status14.OK,
+    success: true,
+    message: "Users fetched successfully",
+    meta: result.meta,
+    data: result.data
+  });
+});
+var getById4 = catchAsync(async (req, res) => {
+  const result = await UserService.getById(String(req.params.id));
+  sendResponse(res, {
+    statusCode: status14.OK,
+    success: true,
+    message: "User fetched successfully",
+    data: result
+  });
+});
+var update8 = catchAsync(async (req, res) => {
+  const result = await UserService.update(String(req.params.id), req.body);
+  sendResponse(res, {
+    statusCode: status14.OK,
+    success: true,
+    message: "User updated successfully",
+    data: result
+  });
+});
+var UserController = {
+  getAll: getAll8,
+  getById: getById4,
+  update: update8
+};
+
+// src/app/modules/user/user.validation.ts
+import z10 from "zod";
+var update9 = z10.object({
+  body: z10.object({
+    name: z10.string().min(2).max(100).optional(),
+    image: z10.string().url().optional(),
+    role: z10.enum(["MEMBER", "ADMIN"]).optional(),
+    status: z10.enum(["ACTIVE", "DEACTIVATED"]).optional()
+  })
+});
+var UserValidation = {
+  update: update9
+};
+
+// src/app/modules/user/user.route.ts
+var router9 = Router9();
+router9.get("/", checkAuth("ADMIN"), UserController.getAll);
+router9.get("/:id", checkAuth("ADMIN"), UserController.getById);
+router9.patch(
+  "/:id",
+  checkAuth("ADMIN"),
+  validateRequest(UserValidation.update),
+  UserController.update
+);
+var UserRoutes = router9;
+
+// src/app/modules/vote/vote.route.ts
+import { Router as Router10 } from "express";
+
+// src/app/modules/vote/vote.controller.ts
+import status15 from "http-status";
+
+// src/app/modules/vote/vote.service.ts
+var upsert = async (userId, payload) => {
+  return prisma.ideaVote.upsert({
+    where: {
+      ideaId_userId: {
+        ideaId: payload.ideaId,
+        userId
+      }
+    },
+    create: {
+      ideaId: payload.ideaId,
+      userId,
+      type: payload.type
+    },
+    update: {
+      type: payload.type
+    }
+  });
+};
+var remove7 = async (userId, ideaId) => {
+  return prisma.ideaVote.delete({
+    where: {
+      ideaId_userId: {
+        ideaId,
+        userId
+      }
+    }
+  });
+};
+var VoteService = {
+  upsert,
+  remove: remove7
+};
+
+// src/app/modules/vote/vote.controller.ts
+var upsert2 = catchAsync(async (req, res) => {
+  if (!req.user?.id) throw new AppError_default(status15.UNAUTHORIZED, "Unauthorized");
+  const result = await VoteService.upsert(req.user.id, req.body);
+  sendResponse(res, {
+    statusCode: status15.OK,
+    success: true,
+    message: "Vote saved successfully",
+    data: result
+  });
+});
+var remove8 = catchAsync(async (req, res) => {
+  if (!req.user?.id) throw new AppError_default(status15.UNAUTHORIZED, "Unauthorized");
+  const result = await VoteService.remove(req.user.id, req.body.ideaId);
+  sendResponse(res, {
+    statusCode: status15.OK,
+    success: true,
+    message: "Vote removed successfully",
+    data: result
+  });
+});
+var VoteController = {
+  upsert: upsert2,
+  remove: remove8
+};
+
+// src/app/modules/vote/vote.validation.ts
+import z11 from "zod";
+var upsert3 = z11.object({
+  body: z11.object({
+    ideaId: z11.string().min(1),
+    type: z11.enum(["UPVOTE", "DOWNVOTE"])
+  })
+});
+var remove9 = z11.object({
+  body: z11.object({
+    ideaId: z11.string().min(1)
+  })
+});
+var VoteValidation = {
+  upsert: upsert3,
+  remove: remove9
+};
+
+// src/app/modules/vote/vote.route.ts
+var router10 = Router10();
+router10.post(
+  "/",
+  checkAuth("MEMBER", "ADMIN"),
+  validateRequest(VoteValidation.upsert),
+  VoteController.upsert
+);
+router10.delete(
+  "/",
+  checkAuth("MEMBER", "ADMIN"),
+  validateRequest(VoteValidation.remove),
+  VoteController.remove
+);
+var VoteRoutes = router10;
+
+// src/app/routes/index.ts
+var router11 = Router11();
+router11.use("/auth", AuthRoutes);
+router11.use("/users", UserRoutes);
+router11.use("/admins", AdminRoutes);
+router11.use("/categories", CategoryRoutes);
+router11.use("/ideas", IdeaRoutes);
+router11.use("/votes", VoteRoutes);
+router11.use("/comments", CommentRoutes);
+router11.use("/purchases", PurchaseRoutes);
+router11.use("/payments", PaymentRoutes);
+router11.use("/newsletters", NewsletterRoutes);
+var IndexRoutes = router11;
+
+// src/app.ts
+var app = express();
+app.set("query parser", (str) => qs.parse(str));
+app.set("view engine", "ejs");
+app.set("views", path3.resolve(process.cwd(), `src/app/templates`));
+app.use(
+  cors({
+    origin: [
+      envVariables.FRONTEND_URL,
+      envVariables.BETTER_AUTH_URL,
+      "http://localhost:3000",
+      "http://localhost:5000"
+    ],
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
+    allowedHeaders: ["Content-Type", "Authorization", "x-refresh-token"]
+  })
+);
+app.use(express.urlencoded({ extended: true }));
+app.use(
+  express.json({
+    verify: (req, _res, buf) => {
+      req.rawBody = buf;
+    }
+  })
+);
+app.use(cookieParser());
+app.use(attachRequestUser);
+app.use("/api/auth/sign-up/email", (req, res, next) => {
+  if (req.body?.role && req.body.role !== "MEMBER") {
+    return res.status(403).json({
+      success: false,
+      message: "Admin accounts can only be created via seeding"
+    });
+  }
+  req.body.role = "MEMBER";
+  req.body.status = "ACTIVE";
+  return next();
+});
+app.use("/api/auth", toNodeHandler(auth));
+app.use("/api/v1", IndexRoutes);
+app.get("/", async (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: "EcoSpark Hub backend is running"
+  });
+});
+app.use(globalErrorHandler);
+app.use(notFound);
+var app_default = app;
+
+// src/index.ts
+var index_default = app_default;
+export {
+  index_default as default
+};
