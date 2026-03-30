@@ -1,245 +1,190 @@
 # EcoSpark Hub Backend
 
-A production-ready REST API for the EcoSpark Hub platform, built with Express, TypeScript, Prisma, PostgreSQL, and Better Auth.
+EcoSpark Hub Backend is a RESTful API for a sustainability-focused community platform where users can share ideas, vote, comment, purchase access to premium ideas, and subscribe for updates. The application supports role-based access for members and administrators, secure authentication, idea moderation workflows, payment processing, and email-based account actions.
 
-## Overview
+## Live URLs
 
-This service handles:
-- Authentication and session management
-- User and admin operations
-- Idea publishing and moderation workflow
-- Voting and commenting
-- Purchase and Stripe payment flow
+- Frontend: `Add your deployed frontend URL here`
+- Backend API: `Add your deployed backend URL here`
+- Repository: `https://github.com/arefin008/eco_spark_hub_backend`
+
+## Project Description
+
+This backend powers the core business logic of the EcoSpark Hub platform. It allows members to submit sustainability ideas, manage their own content, interact through votes and comments, and purchase access to paid ideas. It also provides administrative tools for moderation, category management, user oversight, and platform statistics.
+
+The project is built with a modular architecture using Express, TypeScript, Prisma, PostgreSQL, and Better Auth, making it suitable for maintainable production-grade development.
+
+## Features
+
+- Secure authentication with email/password, JWT, Better Auth session handling, OTP, and Google OAuth support
+- Role-based authorization for members and administrators
+- Idea creation, update, deletion, submission, and review workflow
+- Admin moderation for approving or rejecting ideas with feedback
+- Category management for organizing sustainability ideas
+- Voting system with upvote, downvote, and vote removal support
+- Comment system for idea discussions
+- Paid idea purchase flow with Stripe checkout and webhook confirmation
 - Newsletter subscription management
+- Cloudinary-based media upload handling
+- Email templates for verification, OTP, password reset, and payment-related communication
+- Centralized validation, error handling, and structured API responses
+
+## Technologies Used
+
+- Node.js
+- Express.js
+- TypeScript
+- Prisma ORM
+- PostgreSQL
+- Better Auth
+- JWT
+- Zod
+- Stripe
+- Nodemailer
+- EJS
+- pnpm
+- Vercel
+
+## API Overview
 
 Base API URL:
+
 - `http://localhost:5000/api/v1`
 
-Auth provider routes:
+Authentication base:
+
 - `http://localhost:5000/api/auth`
 
 Health check:
+
 - `GET /`
 
-## Tech Stack
+Main modules:
 
-- Runtime: Node.js
-- Framework: Express 5
-- Language: TypeScript
-- ORM: Prisma 7 (PostgreSQL)
-- Auth: Better Auth (email/password, Google OAuth, OTP)
-- Validation: Zod
-- Payments: Stripe
-- File handling: Multer + Cloudinary
-- Email: Nodemailer + EJS templates
+- Auth
+- Admin
+- Users
+- Categories
+- Ideas
+- Votes
+- Comments
+- Purchases
+- Payments
+- Newsletter
 
-## Project Structure
+## Setup Instructions
 
-```txt
-src/
-  app/
-    config/          # environment and app config
-    lib/             # auth, prisma and integrations
-    middleware/      # auth, validation, error handling
-    modules/         # feature modules (auth, idea, payment, etc.)
-    routes/          # API route registry
-    templates/       # email templates
-    utils/           # shared utilities (email, seeding, query helpers)
-  server.ts          # bootstrap and process-level handlers
-prisma/
-  schema/            # split Prisma schema files
-  migrations/        # Prisma migrations
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/arefin008/eco_spark_hub_backend.git
+cd eco_spark_hub_backend
 ```
 
-## Environment Variables
-
-Create a `.env` file in the project root.
-
-### Required to Start
-
-| Variable | Description |
-| --- | --- |
-| `NODE_ENV` | Runtime environment (`development`, `production`) |
-| `PORT` | API server port (e.g., `5000`) |
-| `DATABASE_URL` | PostgreSQL connection URL |
-| `BETTER_AUTH_SECRET` | Better Auth secret key |
-| `BETTER_AUTH_URL` | Backend public URL (e.g., `http://localhost:5000`) |
-
-### Core Auth and Token Config
-
-| Variable | Default |
-| --- | --- |
-| `ACCESS_TOKEN_SECRET` | `dev-access-token-secret` |
-| `REFRESH_TOKEN_SECRET` | `dev-refresh-token-secret` |
-| `ACCESS_TOKEN_EXPIRES_IN` | `1h` |
-| `REFRESH_TOKEN_EXPIRES_IN` | `7d` |
-| `BETTER_AUTH_SESSION_TOKEN_EXPIRES_IN` | `1d` |
-| `BETTER_AUTH_SESSION_TOKEN_UPDATE_AGE` | `1h` |
-
-### Frontend / OAuth
-
-| Variable | Description |
-| --- | --- |
-| `FRONTEND_URL` | Frontend origin (default: `http://localhost:3000`) |
-| `GOOGLE_CLIENT_ID` | Google OAuth client ID |
-| `GOOGLE_CLIENT_SECRET` | Google OAuth client secret |
-| `GOOGLE_CALLBACK_URL` | Google OAuth callback URL. In production this should be `https://<your-backend-domain>/api/auth/callback/google` |
-
-### Email Sender
-
-| Variable |
-| --- |
-| `EMAIL_SENDER_SMTP_USER` |
-| `EMAIL_SENDER_SMTP_PASS` |
-| `EMAIL_SENDER_SMTP_HOST` |
-| `EMAIL_SENDER_SMTP_PORT` |
-| `EMAIL_SENDER_SMTP_FROM` |
-
-### Cloudinary
-
-| Variable |
-| --- |
-| `CLOUDINARY_CLOUD_NAME` |
-| `CLOUDINARY_API_KEY` |
-| `CLOUDINARY_API_SECRET` |
-
-### Stripe
-
-| Variable |
-| --- |
-| `STRIPE_SECRET_KEY` |
-| `STRIPE_WEBHOOK_SECRET` |
-
-### Optional Super Admin Seeding
-
-If both variables are present, the server seeds/repairs an admin account at startup.
-
-| Variable |
-| --- |
-| `SUPER_ADMIN_EMAIL` |
-| `SUPER_ADMIN_PASSWORD` |
-
-## Getting Started
-
-1. Install dependencies
+### 2. Install dependencies
 
 ```bash
 pnpm install
 ```
 
-2. Configure environment
+### 3. Configure environment variables
 
-Copy `.env.example` to `.env` manually (or use `cp .env.example .env` on Unix).
+Create a `.env` file in the project root and add the required configuration.
 
-3. Generate Prisma client
+Minimum required variables:
+
+```env
+NODE_ENV=development
+PORT=5000
+DATABASE_URL=your_postgresql_database_url
+BETTER_AUTH_SECRET=your_better_auth_secret
+BETTER_AUTH_URL=http://localhost:5000
+FRONTEND_URL=http://localhost:3000
+GOOGLE_CALLBACK_URL=http://localhost:5000/api/auth/callback/google
+```
+
+Additional services used by the project may require:
+
+- Google OAuth credentials
+- SMTP email credentials
+- Cloudinary credentials
+- Stripe secret keys and webhook secret
+- Optional super admin seed credentials
+
+You can also use the provided `.env.example` as a starting point.
+
+### 4. Generate the Prisma client
 
 ```bash
 pnpm generate
 ```
 
-4. Apply migrations (recommended)
+### 5. Apply database migrations
 
 ```bash
 pnpm migrate
 ```
 
-Alternative for development sync:
+If you want to sync the schema without creating a migration in development:
 
 ```bash
 pnpm push
 ```
 
-5. Start the development server
+### 6. Start the development server
 
 ```bash
 pnpm dev
 ```
 
-Server runs at:
-- `http://localhost:5000`
+The server will run on:
+
+```bash
+http://localhost:5000
+```
 
 ## Available Scripts
 
-- `pnpm dev` - run in watch mode using `tsx`
-- `pnpm build` - compile TypeScript to `dist`
-- `pnpm start` - run compiled server
-- `pnpm lint` - run ESLint
-- `pnpm generate` - generate Prisma client
-- `pnpm migrate` - run Prisma migrate dev
-- `pnpm push` - push schema to DB
-- `pnpm pull` - pull schema from DB
-- `pnpm studio` - open Prisma Studio
-- `pnpm stripe:webhook` - forward Stripe events to local webhook endpoint
+- `pnpm dev` - Start the development server with watch mode
+- `pnpm build` - Build the project for deployment
+- `pnpm start` - Run the compiled application
+- `pnpm lint` - Run ESLint on the source code
+- `pnpm generate` - Generate the Prisma client
+- `pnpm migrate` - Run Prisma migrations
+- `pnpm push` - Push the Prisma schema to the database
+- `pnpm pull` - Pull the database schema
+- `pnpm studio` - Open Prisma Studio
+- `pnpm stripe:webhook` - Forward Stripe webhook events to local development
 
-## API Modules
+## Project Structure
 
-All routes are mounted under `/api/v1`.
-
-### Auth (`/auth`)
-- `POST /register`
-- `POST /login`
-- `POST /refresh-token`
-- `GET /me`
-- `POST /change-password`
-- `POST /logout`
-- `POST /verify-email`
-- `POST /forgot-password`
-- `POST /reset-password`
-
-### Admin (`/admins`)
-- `GET /stats`
-- `PATCH /users/:id/status`
-
-### Users (`/users`)
-- `GET /`
-- `GET /:id`
-- `PATCH /:id`
-
-### Categories (`/categories`)
-- `GET /`
-- `POST /`
-- `PATCH /:id`
-- `DELETE /:id`
-
-### Ideas (`/ideas`)
-- `GET /`
-- `GET /mine`
-- `GET /:id`
-- `POST /`
-- `PATCH /:id`
-- `DELETE /:id`
-- `PATCH /:id/submit`
-- `PATCH /:id/review`
-
-### Votes (`/votes`)
-- `POST /`
-- `DELETE /`
-
-### Comments (`/comments`)
-- `GET /idea/:ideaId`
-- `POST /`
-- `DELETE /:id`
-
-### Purchases (`/purchases`)
-- `POST /`
-- `GET /me`
-
-### Payments (`/payments`)
-- `POST /confirm`
-- `GET /stripe/success`
-- `GET /stripe/cancel`
-- `POST /:purchaseId/checkout`
-- `GET /:purchaseId/status`
-- `POST /webhook`
-
-### Newsletter (`/newsletters`)
-- `POST /subscribe`
-- `PATCH /unsubscribe/:email`
-- `GET /`
+```text
+src/
+  app/
+    config/
+    errorHelpers/
+    interfaces/
+    lib/
+    middleware/
+    modules/
+    routes/
+    shared/
+    templates/
+    utils/
+  app.ts
+  index.ts
+  server.ts
+prisma/
+  migrations/
+  schema/
+api/
+docs/
+```
 
 ## Notes
 
-- CORS is configured for `FRONTEND_URL`, `BETTER_AUTH_URL`, and localhost origins.
-- Request payloads are validated with Zod before reaching controllers.
-- Global error handling and 404 handling are enabled.
-- For Google OAuth on Vercel, add `https://<your-backend-domain>/api/auth/callback/google` to Google Cloud Console as an authorized redirect URI.
+- The application uses modular route organization for scalability and maintainability.
+- CORS is configured for local development and configured frontend/backend origins.
+- Prisma is configured with a split schema structure for cleaner database modeling.
+- Stripe webhook support is included for payment status synchronization.
+- Deployment configuration for Vercel is already present in the project.
