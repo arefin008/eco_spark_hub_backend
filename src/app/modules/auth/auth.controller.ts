@@ -5,6 +5,7 @@ import AppError from "../../errorHelpers/AppError";
 import { catchAsync } from "../../shared/catchAsync";
 import { sendResponse } from "../../shared/sendResponse";
 import { authCookieSettings } from "../../utils/authCookie";
+import { CookieUtils } from "../../utils/cookie";
 import { tokenUtils } from "../../utils/token";
 import { AuthService } from "./auth.service";
 
@@ -184,9 +185,7 @@ const refreshToken = catchAsync(async (req: Request, res: Response) => {
       ? req.cookies.refreshToken
       : undefined,
     getRefreshTokenFromHeader(req),
-    typeof req.cookies["better-auth.session_token"] === "string"
-      ? req.cookies["better-auth.session_token"]
-      : undefined,
+    CookieUtils.getBetterAuthSessionCookie(req),
   );
 
   if (!result) {
@@ -252,10 +251,7 @@ const googleSignInUrl = catchAsync(async (req: Request, res: Response) => {
 });
 
 const googleCallback = catchAsync(async (req: Request, res: Response) => {
-  const sessionToken =
-    typeof req.cookies["better-auth.session_token"] === "string"
-      ? req.cookies["better-auth.session_token"]
-      : undefined;
+  const sessionToken = CookieUtils.getBetterAuthSessionCookie(req);
 
   if (!sessionToken) {
     throw new AppError(status.UNAUTHORIZED, "Session token is required");
@@ -303,9 +299,7 @@ const changePassword = catchAsync(async (req: Request, res: Response) => {
   const result = await AuthService.changePassword(
     req.user.id,
     req.body,
-    typeof req.cookies["better-auth.session_token"] === "string"
-      ? req.cookies["better-auth.session_token"]
-      : undefined,
+    CookieUtils.getBetterAuthSessionCookie(req),
   );
 
   tokenUtils.setAccessTokenCookie(res, result.accessToken);
@@ -324,11 +318,13 @@ const changePassword = catchAsync(async (req: Request, res: Response) => {
 });
 
 const logout = catchAsync(async (req: Request, res: Response) => {
-  await AuthService.logout(
-    typeof req.cookies["better-auth.session_token"] === "string"
-      ? req.cookies["better-auth.session_token"]
-      : undefined,
+  const authResponse = await AuthService.logout(
+    CookieUtils.getBetterAuthSessionCookie(req),
   );
+
+  if (authResponse) {
+    applyResponseCookies(res, authResponse.headers);
+  }
 
   tokenUtils.clearAuthCookies(res);
 

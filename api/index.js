@@ -1062,12 +1062,16 @@ var getCookie = (req, key) => {
   const value = req.cookies?.[key];
   return typeof value === "string" ? value : void 0;
 };
+var getBetterAuthSessionCookie = (req) => {
+  return getCookie(req, "__Secure-better-auth.session_token") || getCookie(req, "better-auth.session_token") || getCookie(req, "session_token");
+};
 var clearCookie = (res, key, options) => {
   res.clearCookie(key, options);
 };
 var CookieUtils = {
   setCookie,
   getCookie,
+  getBetterAuthSessionCookie,
   clearCookie
 };
 
@@ -1119,6 +1123,10 @@ var setBetterAuthSessionCookie = (res, token) => {
   logCookieOperation("set", "better-auth.session_token", options);
   CookieUtils.setCookie(res, "better-auth.session_token", token, options);
 };
+var clearCookieWithLogging = (res, key, options) => {
+  logCookieOperation("clear", key, options);
+  CookieUtils.clearCookie(res, key, options);
+};
 var clearAuthCookies = (res) => {
   const options = {
     httpOnly: true,
@@ -1126,12 +1134,11 @@ var clearAuthCookies = (res) => {
     sameSite: authCookieSettings.sameSite,
     path: "/"
   };
-  logCookieOperation("clear", "accessToken", options);
-  CookieUtils.clearCookie(res, "accessToken", options);
-  logCookieOperation("clear", "refreshToken", options);
-  CookieUtils.clearCookie(res, "refreshToken", options);
-  logCookieOperation("clear", "better-auth.session_token", options);
-  CookieUtils.clearCookie(res, "better-auth.session_token", options);
+  clearCookieWithLogging(res, "accessToken", options);
+  clearCookieWithLogging(res, "refreshToken", options);
+  clearCookieWithLogging(res, "__Secure-better-auth.session_token", options);
+  clearCookieWithLogging(res, "better-auth.session_token", options);
+  clearCookieWithLogging(res, "session_token", options);
 };
 var tokenUtils = {
   getAccessToken,
@@ -1463,12 +1470,13 @@ var changePassword = async (userId, payload, sessionToken) => {
 };
 var logout = async (sessionToken) => {
   if (!sessionToken) {
-    return;
+    return null;
   }
-  await auth.api.signOut({
+  return auth.api.signOut({
     headers: new Headers({
       Authorization: `Bearer ${sessionToken}`
-    })
+    }),
+    asResponse: true
   });
 };
 var verifyEmail = async (payload) => {
@@ -1662,7 +1670,7 @@ var refreshToken = catchAsync(async (req, res) => {
     req.body,
     typeof req.cookies.refreshToken === "string" ? req.cookies.refreshToken : void 0,
     getRefreshTokenFromHeader(req),
-    typeof req.cookies["better-auth.session_token"] === "string" ? req.cookies["better-auth.session_token"] : void 0
+    CookieUtils.getBetterAuthSessionCookie(req)
   );
   if (!result) {
     tokenUtils.clearAuthCookies(res);
@@ -1710,7 +1718,7 @@ var googleSignInUrl = catchAsync(async (req, res) => {
   });
 });
 var googleCallback = catchAsync(async (req, res) => {
-  const sessionToken = typeof req.cookies["better-auth.session_token"] === "string" ? req.cookies["better-auth.session_token"] : void 0;
+  const sessionToken = CookieUtils.getBetterAuthSessionCookie(req);
   if (!sessionToken) {
     throw new AppError_default(status7.UNAUTHORIZED, "Session token is required");
   }
@@ -1744,7 +1752,7 @@ var changePassword2 = catchAsync(async (req, res) => {
   const result = await AuthService.changePassword(
     req.user.id,
     req.body,
-    typeof req.cookies["better-auth.session_token"] === "string" ? req.cookies["better-auth.session_token"] : void 0
+    CookieUtils.getBetterAuthSessionCookie(req)
   );
   tokenUtils.setAccessTokenCookie(res, result.accessToken);
   tokenUtils.setRefreshTokenCookie(res, result.refreshToken);
@@ -1759,9 +1767,12 @@ var changePassword2 = catchAsync(async (req, res) => {
   });
 });
 var logout2 = catchAsync(async (req, res) => {
-  await AuthService.logout(
-    typeof req.cookies["better-auth.session_token"] === "string" ? req.cookies["better-auth.session_token"] : void 0
+  const authResponse = await AuthService.logout(
+    CookieUtils.getBetterAuthSessionCookie(req)
   );
+  if (authResponse) {
+    applyResponseCookies(res, authResponse.headers);
+  }
   tokenUtils.clearAuthCookies(res);
   sendResponse(res, {
     statusCode: status7.OK,
@@ -2292,6 +2303,18 @@ import { Router as Router5 } from "express";
 import status10 from "http-status";
 
 // src/app/modules/idea/idea.service.ts
+var createLockedIdeaResponse = (idea, lockReason, accessState) => ({
+  id: idea.id,
+  title: idea.title,
+  isPaid: idea.isPaid,
+  price: idea.price,
+  category: idea.category,
+  author: idea.author,
+  createdAt: idea.createdAt,
+  canAccess: false,
+  lockReason,
+  accessState
+});
 var shapeIdea = (idea) => {
   const upvotes = idea.votes.filter((v) => v.type === VoteType.UPVOTE).length;
   const downvotes = idea.votes.filter((v) => v.type === VoteType.DOWNVOTE).length;
@@ -2423,7 +2446,11 @@ var getById = async (id, user) => {
   const isOwner = user?.id === idea.authorId;
   const isAdmin = user?.role === "ADMIN";
   if (idea.status !== IdeaStatus.APPROVED && !isOwner && !isAdmin) {
-    throw new AppError_default(404, "Idea not found");
+    return createLockedIdeaResponse(
+      idea,
+      "This idea is not publicly available yet",
+      "UNAVAILABLE"
+    );
   }
   if (!idea.isPaid) {
     return { ...shaped, canAccess: true };
@@ -2432,17 +2459,11 @@ var getById = async (id, user) => {
     return { ...shaped, canAccess: true };
   }
   if (!user?.id) {
-    return {
-      id: idea.id,
-      title: idea.title,
-      isPaid: true,
-      price: idea.price,
-      category: idea.category,
-      author: idea.author,
-      createdAt: idea.createdAt,
-      canAccess: false,
-      lockReason: "Login and purchase required"
-    };
+    return createLockedIdeaResponse(
+      idea,
+      "Login and purchase required",
+      "LOGIN_REQUIRED"
+    );
   }
   const purchase = await prisma.ideaPurchase.findFirst({
     where: {
@@ -2452,17 +2473,7 @@ var getById = async (id, user) => {
     }
   });
   if (!purchase) {
-    return {
-      id: idea.id,
-      title: idea.title,
-      isPaid: true,
-      price: idea.price,
-      category: idea.category,
-      author: idea.author,
-      createdAt: idea.createdAt,
-      canAccess: false,
-      lockReason: "Purchase required"
-    };
+    return createLockedIdeaResponse(idea, "Purchase required", "PURCHASE_REQUIRED");
   }
   return { ...shaped, canAccess: true };
 };

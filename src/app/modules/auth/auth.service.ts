@@ -454,13 +454,14 @@ const changePassword = async (
 
 const logout = async (sessionToken?: string) => {
   if (!sessionToken) {
-    return;
+    return null;
   }
 
-  await auth.api.signOut({
+  return auth.api.signOut({
     headers: new Headers({
       Authorization: `Bearer ${sessionToken}`,
     }),
+    asResponse: true,
   });
 };
 

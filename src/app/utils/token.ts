@@ -75,6 +75,15 @@ const setBetterAuthSessionCookie = (res: Response, token: string) => {
   CookieUtils.setCookie(res, "better-auth.session_token", token, options);
 };
 
+const clearCookieWithLogging = (
+  res: Response,
+  key: string,
+  options: CookieOptions,
+) => {
+  logCookieOperation("clear", key, options);
+  CookieUtils.clearCookie(res, key, options);
+};
+
 const clearAuthCookies = (res: Response) => {
   const options = {
     httpOnly: true,
@@ -83,12 +92,11 @@ const clearAuthCookies = (res: Response) => {
     path: "/",
   } satisfies CookieOptions;
 
-  logCookieOperation("clear", "accessToken", options);
-  CookieUtils.clearCookie(res, "accessToken", options);
-  logCookieOperation("clear", "refreshToken", options);
-  CookieUtils.clearCookie(res, "refreshToken", options);
-  logCookieOperation("clear", "better-auth.session_token", options);
-  CookieUtils.clearCookie(res, "better-auth.session_token", options);
+  clearCookieWithLogging(res, "accessToken", options);
+  clearCookieWithLogging(res, "refreshToken", options);
+  clearCookieWithLogging(res, "__Secure-better-auth.session_token", options);
+  clearCookieWithLogging(res, "better-auth.session_token", options);
+  clearCookieWithLogging(res, "session_token", options);
 };
 
 export const tokenUtils = {
