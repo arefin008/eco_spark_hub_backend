@@ -118,6 +118,38 @@ var loadEnvVariables = () => {
 };
 var envVariables = loadEnvVariables();
 
+// src/app/utils/authCookie.ts
+var parseUrl = (value) => {
+  try {
+    return new URL(value);
+  } catch {
+    return null;
+  }
+};
+var isLoopbackHostname = (hostname) => {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]";
+};
+var getSiteKey = (url) => {
+  const hostname = url.hostname.toLowerCase();
+  if (isLoopbackHostname(hostname)) {
+    return `${url.protocol}//${hostname}`;
+  }
+  const parts = hostname.split(".").filter(Boolean);
+  if (parts.length <= 2) {
+    return `${url.protocol}//${hostname}`;
+  }
+  return `${url.protocol}//${parts.slice(-2).join(".")}`;
+};
+var frontendUrl = parseUrl(envVariables.FRONTEND_URL);
+var backendUrl = parseUrl(envVariables.BETTER_AUTH_URL);
+var shouldUseCrossSiteCookies = frontendUrl && backendUrl ? getSiteKey(frontendUrl) !== getSiteKey(backendUrl) : envVariables.NODE_ENV === "production";
+var shouldUseSecureCookies = backendUrl?.protocol === "https:" || shouldUseCrossSiteCookies && envVariables.NODE_ENV === "production";
+var authCookieSettings = {
+  shouldUseCrossSiteCookies,
+  shouldUseSecureCookies,
+  sameSite: shouldUseCrossSiteCookies ? "none" : "lax"
+};
+
 // src/app/utils/email.ts
 import ejs from "ejs";
 import nodemailer from "nodemailer";
@@ -477,6 +509,7 @@ var auth = betterAuth({
     google: {
       clientId: envVariables.GOOGLE_CLIENT_ID,
       clientSecret: envVariables.GOOGLE_CLIENT_SECRET,
+      redirectURI: envVariables.GOOGLE_CALLBACK_URL || `${envVariables.BETTER_AUTH_URL.replace(/\/$/, "")}/api/auth/callback/google`,
       mapProfileToUser: () => ({
         role: UserRole.MEMBER,
         status: UserStatus.ACTIVE,
@@ -538,7 +571,7 @@ var auth = betterAuth({
     })
   ],
   advanced: {
-    useSecureCookies: false
+    useSecureCookies: authCookieSettings.shouldUseSecureCookies
   }
 });
 
@@ -1053,8 +1086,8 @@ var CookieUtils = {
 // src/app/utils/token.ts
 var getCookieCommonOptions = () => ({
   httpOnly: true,
-  secure: envVariables.NODE_ENV === "production",
-  sameSite: envVariables.NODE_ENV === "production" ? "none" : "lax",
+  secure: authCookieSettings.shouldUseSecureCookies,
+  sameSite: authCookieSettings.sameSite,
   path: "/"
 });
 var getAccessToken = (payload) => {
@@ -1210,7 +1243,7 @@ var getCurrentUser = async (id) => {
     }
   });
   if (!user) {
-    throw new AppError_default(404, "User not found");
+    throw new AppError_default(status6.UNAUTHORIZED, "Unauthorized");
   }
   return user;
 };
@@ -1260,34 +1293,47 @@ var login = async (payload) => {
 };
 var getNewToken = async (payload, cookieRefreshToken, headerRefreshToken, sessionToken) => {
   const refreshToken2 = payload?.refreshToken || cookieRefreshToken || headerRefreshToken;
-  let user = null;
-  if (refreshToken2) {
-    const verifiedRefreshToken = jwtUtils.verifyToken(
-      refreshToken2,
-      envVariables.REFRESH_TOKEN_SECRET
-    );
-    if (!verifiedRefreshToken.success) {
-      throw new AppError_default(status6.UNAUTHORIZED, "Invalid refresh token");
-    }
-    if (typeof verifiedRefreshToken.data.id !== "string" || typeof verifiedRefreshToken.data.email !== "string" || verifiedRefreshToken.data.role !== "MEMBER" && verifiedRefreshToken.data.role !== "ADMIN") {
-      throw new AppError_default(status6.UNAUTHORIZED, "Invalid refresh token payload");
-    }
-    user = await getUserById(verifiedRefreshToken.data.id);
-  } else if (sessionToken) {
-    user = await getUserBySessionToken(sessionToken);
-  } else {
+  if (!refreshToken2 && !sessionToken) {
     return null;
   }
+  const user = await (async () => {
+    if (refreshToken2) {
+      const verifiedRefreshToken = jwtUtils.verifyToken(
+        refreshToken2,
+        envVariables.REFRESH_TOKEN_SECRET
+      );
+      if (!verifiedRefreshToken.success) {
+        return null;
+      }
+      if (typeof verifiedRefreshToken.data.id !== "string" || typeof verifiedRefreshToken.data.email !== "string" || verifiedRefreshToken.data.role !== "MEMBER" && verifiedRefreshToken.data.role !== "ADMIN") {
+        return null;
+      }
+      return getUserById(verifiedRefreshToken.data.id);
+    }
+    if (sessionToken) {
+      try {
+        return await getUserBySessionToken(sessionToken);
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  })();
   if (!user) {
-    throw new AppError_default(status6.UNAUTHORIZED, "User not found");
+    return null;
   }
   if (user.status === UserStatus.DEACTIVATED) {
     throw new AppError_default(status6.FORBIDDEN, "User account is deactivated");
   }
   if (sessionToken && refreshToken2) {
-    const sessionUser = await getUserBySessionToken(sessionToken);
-    if (sessionUser.id !== user.id) {
-      throw new AppError_default(status6.UNAUTHORIZED, "Invalid session token");
+    let sessionUser = null;
+    try {
+      sessionUser = await getUserBySessionToken(sessionToken);
+    } catch {
+      return null;
+    }
+    if (!sessionUser || sessionUser.id !== user.id) {
+      return null;
     }
   }
   const tokenPayload = toTokenPayload({
@@ -1306,15 +1352,36 @@ var getNewToken = async (payload, cookieRefreshToken, headerRefreshToken, sessio
     sessionToken
   };
 };
-var getGoogleSignInUrl = (callbackUrl) => {
-  const searchParams = new URLSearchParams({
-    provider: "google",
-    callbackURL: getGoogleCallbackHandlerUrl(callbackUrl)
+var getGoogleSignInUrl = async (callbackUrl) => {
+  const payload = await auth.api.signInSocial({
+    body: {
+      provider: "google",
+      callbackURL: getGoogleCallbackHandlerUrl(callbackUrl)
+    }
   });
-  return `${envVariables.BETTER_AUTH_URL.replace(/\/$/, "")}/api/auth/sign-in/social?${searchParams.toString()}`;
+  if (!payload.url) {
+    throw new AppError_default(status6.BAD_REQUEST, "Google sign-in URL was not returned");
+  }
+  return payload.url;
 };
-var completeSocialLogin = async (sessionToken) => {
-  const user = await getUserBySessionToken(sessionToken);
+var completeSocialLogin = async (requestHeaders, sessionToken) => {
+  let user = null;
+  try {
+    const session = await auth.api.getSession({
+      headers: requestHeaders
+    });
+    if (session?.user) {
+      const role = String(session.user.role);
+      if ((role === "MEMBER" || role === "ADMIN") && typeof session.user.id === "string" && typeof session.user.email === "string") {
+        user = await getUserById(session.user.id);
+      }
+    }
+  } catch {
+    user = null;
+  }
+  if (!user) {
+    user = await getUserBySessionToken(sessionToken);
+  }
   if (user.status === UserStatus.DEACTIVATED) {
     throw new AppError_default(status6.FORBIDDEN, "User account is deactivated");
   }
@@ -1453,6 +1520,28 @@ var getRefreshTokenFromHeader = (req) => {
   }
   return void 0;
 };
+var getGoogleCallbackUrlFromRequest = (req) => {
+  if (typeof req.query.callbackUrl === "string") {
+    return req.query.callbackUrl;
+  }
+  if (typeof req.body?.callbackUrl === "string") {
+    return req.body.callbackUrl;
+  }
+  return envVariables.FRONTEND_URL;
+};
+var toWebHeaders2 = (req) => {
+  const headers = new Headers();
+  Object.entries(req.headers).forEach(([key, value]) => {
+    if (typeof value === "string") {
+      headers.set(key, value);
+      return;
+    }
+    if (Array.isArray(value)) {
+      headers.set(key, value.join(","));
+    }
+  });
+  return headers;
+};
 var register2 = catchAsync(async (req, res) => {
   if (req.body?.role === "ADMIN") {
     throw new AppError_default(
@@ -1515,20 +1604,20 @@ var refreshToken = catchAsync(async (req, res) => {
   });
 });
 var googleSignIn = catchAsync(async (req, res) => {
-  const callbackUrl = typeof req.query.callbackUrl === "string" ? req.query.callbackUrl : envVariables.FRONTEND_URL;
+  const callbackUrl = getGoogleCallbackUrlFromRequest(req);
   res.redirect(
     status7.TEMPORARY_REDIRECT,
-    AuthService.getGoogleSignInUrl(callbackUrl)
+    await AuthService.getGoogleSignInUrl(callbackUrl)
   );
 });
 var googleSignInUrl = catchAsync(async (req, res) => {
-  const callbackUrl = typeof req.query.callbackUrl === "string" ? req.query.callbackUrl : envVariables.FRONTEND_URL;
+  const callbackUrl = getGoogleCallbackUrlFromRequest(req);
   sendResponse(res, {
     statusCode: status7.OK,
     success: true,
     message: "Google sign-in URL generated successfully",
     data: {
-      url: AuthService.getGoogleSignInUrl(callbackUrl)
+      url: await AuthService.getGoogleSignInUrl(callbackUrl)
     }
   });
 });
@@ -1537,7 +1626,10 @@ var googleCallback = catchAsync(async (req, res) => {
   if (!sessionToken) {
     throw new AppError_default(status7.UNAUTHORIZED, "Session token is required");
   }
-  const result = await AuthService.completeSocialLogin(sessionToken);
+  const result = await AuthService.completeSocialLogin(
+    toWebHeaders2(req),
+    sessionToken
+  );
   tokenUtils.setAccessTokenCookie(res, result.accessToken);
   tokenUtils.setRefreshTokenCookie(res, result.refreshToken);
   tokenUtils.setBetterAuthSessionCookie(res, result.sessionToken);
@@ -1682,6 +1774,7 @@ router2.post(
   AuthController.register
 );
 router2.post("/login", validateRequest(AuthValidation.login), AuthController.login);
+router2.post("/google", AuthController.googleSignInUrl);
 router2.get("/google", AuthController.googleSignIn);
 router2.get("/google/url", AuthController.googleSignInUrl);
 router2.get("/google/callback", AuthController.googleCallback);
@@ -3376,8 +3469,41 @@ router11.use("/newsletters", NewsletterRoutes);
 var IndexRoutes = router11;
 
 // src/app.ts
+var getTrustedFrontendRedirect = (value) => {
+  if (!value) {
+    return envVariables.FRONTEND_URL;
+  }
+  try {
+    const requestedUrl = new URL(value);
+    const frontendUrl2 = new URL(envVariables.FRONTEND_URL);
+    if (requestedUrl.origin !== frontendUrl2.origin) {
+      return envVariables.FRONTEND_URL;
+    }
+    return requestedUrl.toString();
+  } catch {
+    return envVariables.FRONTEND_URL;
+  }
+};
+var getBrokenGoogleRedirectTarget = (req) => {
+  const directCandidates = [
+    req.query.redirectTo,
+    req.query.callbackUrl,
+    req.query.callbackURL
+  ];
+  for (const candidate of directCandidates) {
+    if (typeof candidate === "string" && candidate.length > 0) {
+      return getTrustedFrontendRedirect(candidate);
+    }
+  }
+  const decodedUrl = decodeURIComponent(req.originalUrl);
+  const match = decodedUrl.match(
+    /(?:redirectTo|callbackUrl|callbackURL|ctTo)=([^&]+)/i
+  );
+  return getTrustedFrontendRedirect(match?.[1]);
+};
 var app = express();
 app.set("query parser", (str) => qs.parse(str));
+app.set("trust proxy", 1);
 app.set("view engine", "ejs");
 app.set("views", path3.resolve(process.cwd(), `src/app/templates`));
 app.use(
@@ -3403,6 +3529,20 @@ app.use(
 );
 app.use(cookieParser());
 app.use(attachRequestUser);
+app.get("/api/auth/sign-in/social", (req, res, next) => {
+  const provider = typeof req.query.provider === "string" ? req.query.provider : "";
+  if (!provider.toLowerCase().startsWith("goog")) {
+    return next();
+  }
+  const redirectUrl = new URL(
+    `${envVariables.BETTER_AUTH_URL.replace(/\/$/, "")}/api/v1/auth/google`
+  );
+  redirectUrl.searchParams.set(
+    "callbackUrl",
+    getBrokenGoogleRedirectTarget(req)
+  );
+  return res.redirect(307, redirectUrl.toString());
+});
 app.use("/api/auth/sign-up/email", (req, res, next) => {
   if (req.body?.role && req.body.role !== "MEMBER") {
     return res.status(403).json({

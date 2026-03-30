@@ -21,6 +21,35 @@ const getRefreshTokenFromHeader = (req: Request) => {
   return undefined;
 };
 
+const getGoogleCallbackUrlFromRequest = (req: Request) => {
+  if (typeof req.query.callbackUrl === "string") {
+    return req.query.callbackUrl;
+  }
+
+  if (typeof req.body?.callbackUrl === "string") {
+    return req.body.callbackUrl;
+  }
+
+  return envVariables.FRONTEND_URL;
+};
+
+const toWebHeaders = (req: Request) => {
+  const headers = new Headers();
+
+  Object.entries(req.headers).forEach(([key, value]) => {
+    if (typeof value === "string") {
+      headers.set(key, value);
+      return;
+    }
+
+    if (Array.isArray(value)) {
+      headers.set(key, value.join(","));
+    }
+  });
+
+  return headers;
+};
+
 const register = catchAsync(async (req: Request, res: Response) => {
   if (req.body?.role === "ADMIN") {
     throw new AppError(
@@ -102,29 +131,23 @@ const refreshToken = catchAsync(async (req: Request, res: Response) => {
 });
 
 const googleSignIn = catchAsync(async (req: Request, res: Response) => {
-  const callbackUrl =
-    typeof req.query.callbackUrl === "string"
-      ? req.query.callbackUrl
-      : envVariables.FRONTEND_URL;
+  const callbackUrl = getGoogleCallbackUrlFromRequest(req);
 
   res.redirect(
     status.TEMPORARY_REDIRECT,
-    AuthService.getGoogleSignInUrl(callbackUrl),
+    await AuthService.getGoogleSignInUrl(callbackUrl),
   );
 });
 
 const googleSignInUrl = catchAsync(async (req: Request, res: Response) => {
-  const callbackUrl =
-    typeof req.query.callbackUrl === "string"
-      ? req.query.callbackUrl
-      : envVariables.FRONTEND_URL;
+  const callbackUrl = getGoogleCallbackUrlFromRequest(req);
 
   sendResponse(res, {
     statusCode: status.OK,
     success: true,
     message: "Google sign-in URL generated successfully",
     data: {
-      url: AuthService.getGoogleSignInUrl(callbackUrl),
+      url: await AuthService.getGoogleSignInUrl(callbackUrl),
     },
   });
 });
@@ -139,7 +162,10 @@ const googleCallback = catchAsync(async (req: Request, res: Response) => {
     throw new AppError(status.UNAUTHORIZED, "Session token is required");
   }
 
-  const result = await AuthService.completeSocialLogin(sessionToken);
+  const result = await AuthService.completeSocialLogin(
+    toWebHeaders(req),
+    sessionToken,
+  );
 
   tokenUtils.setAccessTokenCookie(res, result.accessToken);
   tokenUtils.setRefreshTokenCookie(res, result.refreshToken);
@@ -256,3 +282,4 @@ export const AuthController = {
   forgotPassword,
   resetPassword,
 };
+

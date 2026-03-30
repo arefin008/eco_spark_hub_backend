@@ -3,6 +3,7 @@ import { prismaAdapter } from "better-auth/adapters/prisma";
 import { bearer, emailOTP } from "better-auth/plugins";
 import { UserRole, UserStatus } from "../../generated/prisma/enums";
 import { envVariables } from "../config/env";
+import { authCookieSettings } from "../utils/authCookie";
 import { sendEmail } from "../utils/email";
 import { prisma } from "./prisma";
 
@@ -47,6 +48,9 @@ export const auth = betterAuth({
     google: {
       clientId: envVariables.GOOGLE_CLIENT_ID,
       clientSecret: envVariables.GOOGLE_CLIENT_SECRET,
+      redirectURI:
+        envVariables.GOOGLE_CALLBACK_URL ||
+        `${envVariables.BETTER_AUTH_URL.replace(/\/$/, "")}/api/auth/callback/google`,
       mapProfileToUser: () => ({
         role: UserRole.MEMBER,
         status: UserStatus.ACTIVE,
@@ -113,6 +117,6 @@ export const auth = betterAuth({
     }),
   ],
   advanced: {
-    useSecureCookies: false,
+    useSecureCookies: authCookieSettings.shouldUseSecureCookies,
   },
 });

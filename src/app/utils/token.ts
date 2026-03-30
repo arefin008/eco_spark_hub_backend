@@ -2,6 +2,7 @@ import { CookieOptions, Response } from "express";
 import { JwtPayload, SignOptions } from "jsonwebtoken";
 import ms, { StringValue } from "ms";
 import { envVariables } from "../config/env";
+import { authCookieSettings } from "./authCookie";
 import { CookieUtils } from "./cookie";
 import { jwtUtils } from "./jwt";
 
@@ -15,8 +16,8 @@ type TAuthTokenPayload = JwtPayload & {
 
 const getCookieCommonOptions = (): CookieOptions => ({
   httpOnly: true,
-  secure: envVariables.NODE_ENV === "production",
-  sameSite: envVariables.NODE_ENV === "production" ? "none" : "lax",
+  secure: authCookieSettings.shouldUseSecureCookies,
+  sameSite: authCookieSettings.sameSite,
   path: "/",
 });
 

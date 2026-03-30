@@ -172,7 +172,7 @@ const getCurrentUser = async (id: string) => {
   });
 
   if (!user) {
-    throw new AppError(404, "User not found");
+    throw new AppError(status.UNAUTHORIZED, "Unauthorized");
   }
 
   return user;
@@ -241,36 +241,46 @@ const getNewToken = async (
 ) => {
   const refreshToken =
     payload?.refreshToken || cookieRefreshToken || headerRefreshToken;
-  let user: Awaited<ReturnType<typeof getUserById>> | null = null;
-
-  if (refreshToken) {
-    const verifiedRefreshToken = jwtUtils.verifyToken(
-      refreshToken,
-      envVariables.REFRESH_TOKEN_SECRET,
-    );
-
-    if (!verifiedRefreshToken.success) {
-      throw new AppError(status.UNAUTHORIZED, "Invalid refresh token");
-    }
-
-    if (
-      typeof verifiedRefreshToken.data.id !== "string" ||
-      typeof verifiedRefreshToken.data.email !== "string" ||
-      (verifiedRefreshToken.data.role !== "MEMBER" &&
-        verifiedRefreshToken.data.role !== "ADMIN")
-    ) {
-      throw new AppError(status.UNAUTHORIZED, "Invalid refresh token payload");
-    }
-
-    user = await getUserById(verifiedRefreshToken.data.id);
-  } else if (sessionToken) {
-    user = await getUserBySessionToken(sessionToken);
-  } else {
+  if (!refreshToken && !sessionToken) {
     return null;
   }
 
+  const user = await (async () => {
+    if (refreshToken) {
+      const verifiedRefreshToken = jwtUtils.verifyToken(
+        refreshToken,
+        envVariables.REFRESH_TOKEN_SECRET,
+      );
+
+      if (!verifiedRefreshToken.success) {
+        return null;
+      }
+
+      if (
+        typeof verifiedRefreshToken.data.id !== "string" ||
+        typeof verifiedRefreshToken.data.email !== "string" ||
+        (verifiedRefreshToken.data.role !== "MEMBER" &&
+          verifiedRefreshToken.data.role !== "ADMIN")
+      ) {
+        return null;
+      }
+
+      return getUserById(verifiedRefreshToken.data.id);
+    }
+
+    if (sessionToken) {
+      try {
+        return await getUserBySessionToken(sessionToken);
+      } catch {
+        return null;
+      }
+    }
+
+    return null;
+  })();
+
   if (!user) {
-    throw new AppError(status.UNAUTHORIZED, "User not found");
+    return null;
   }
 
   if (user.status === UserStatus.DEACTIVATED) {
@@ -278,10 +288,17 @@ const getNewToken = async (
   }
 
   if (sessionToken && refreshToken) {
-    const sessionUser = await getUserBySessionToken(sessionToken);
+    let sessionUser: Awaited<ReturnType<typeof getUserBySessionToken>> | null =
+      null;
 
-    if (sessionUser.id !== user.id) {
-      throw new AppError(status.UNAUTHORIZED, "Invalid session token");
+    try {
+      sessionUser = await getUserBySessionToken(sessionToken);
+    } catch {
+      return null;
+    }
+
+    if (!sessionUser || sessionUser.id !== user.id) {
+      return null;
     }
   }
 
@@ -304,17 +321,50 @@ const getNewToken = async (
   };
 };
 
-const getGoogleSignInUrl = (callbackUrl?: string) => {
-  const searchParams = new URLSearchParams({
-    provider: "google",
-    callbackURL: getGoogleCallbackHandlerUrl(callbackUrl),
-  });
+const getGoogleSignInUrl = async (callbackUrl?: string) => {
+  const payload = (await auth.api.signInSocial({
+    body: {
+      provider: "google",
+      callbackURL: getGoogleCallbackHandlerUrl(callbackUrl),
+    },
+  })) as { url?: string };
 
-  return `${envVariables.BETTER_AUTH_URL.replace(/\/$/, "")}/api/auth/sign-in/social?${searchParams.toString()}`;
+  if (!payload.url) {
+    throw new AppError(status.BAD_REQUEST, "Google sign-in URL was not returned");
+  }
+
+  return payload.url;
 };
 
-const completeSocialLogin = async (sessionToken: string) => {
-  const user = await getUserBySessionToken(sessionToken);
+const completeSocialLogin = async (
+  requestHeaders: Headers,
+  sessionToken: string,
+) => {
+  let user = null;
+
+  try {
+    const session = await auth.api.getSession({
+      headers: requestHeaders,
+    });
+
+    if (session?.user) {
+      const role = String(session.user.role);
+
+      if (
+        (role === "MEMBER" || role === "ADMIN") &&
+        typeof session.user.id === "string" &&
+        typeof session.user.email === "string"
+      ) {
+        user = await getUserById(session.user.id);
+      }
+    }
+  } catch {
+    user = null;
+  }
+
+  if (!user) {
+    user = await getUserBySessionToken(sessionToken);
+  }
 
   if (user.status === UserStatus.DEACTIVATED) {
     throw new AppError(status.FORBIDDEN, "User account is deactivated");
@@ -465,3 +515,7 @@ export const AuthService = {
   resetPassword,
   getCurrentUser,
 };
+
+
+
+

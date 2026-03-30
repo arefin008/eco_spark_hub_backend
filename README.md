@@ -83,7 +83,7 @@ Create a `.env` file in the project root.
 | `FRONTEND_URL` | Frontend origin (default: `http://localhost:3000`) |
 | `GOOGLE_CLIENT_ID` | Google OAuth client ID |
 | `GOOGLE_CLIENT_SECRET` | Google OAuth client secret |
-| `GOOGLE_CALLBACK_URL` | Google OAuth callback URL |
+| `GOOGLE_CALLBACK_URL` | Google OAuth callback URL. In production this should be `https://<your-backend-domain>/api/auth/callback/google` |
 
 ### Email Sender
 
@@ -242,3 +242,4 @@ All routes are mounted under `/api/v1`.
 - CORS is configured for `FRONTEND_URL`, `BETTER_AUTH_URL`, and localhost origins.
 - Request payloads are validated with Zod before reaching controllers.
 - Global error handling and 404 handling are enabled.
+- For Google OAuth on Vercel, add `https://<your-backend-domain>/api/auth/callback/google` to Google Cloud Console as an authorized redirect URI.

@@ -11,8 +11,49 @@ import { globalErrorHandler } from "./app/middleware/globalErrorHandler";
 import { notFound } from "./app/middleware/notFound";
 import { IndexRoutes } from "./app/routes";
 
+const getTrustedFrontendRedirect = (value?: string) => {
+  if (!value) {
+    return envVariables.FRONTEND_URL;
+  }
+
+  try {
+    const requestedUrl = new URL(value);
+    const frontendUrl = new URL(envVariables.FRONTEND_URL);
+
+    if (requestedUrl.origin !== frontendUrl.origin) {
+      return envVariables.FRONTEND_URL;
+    }
+
+    return requestedUrl.toString();
+  } catch {
+    return envVariables.FRONTEND_URL;
+  }
+};
+
+const getBrokenGoogleRedirectTarget = (req: Request) => {
+  const directCandidates = [
+    req.query.redirectTo,
+    req.query.callbackUrl,
+    req.query.callbackURL,
+  ];
+
+  for (const candidate of directCandidates) {
+    if (typeof candidate === "string" && candidate.length > 0) {
+      return getTrustedFrontendRedirect(candidate);
+    }
+  }
+
+  const decodedUrl = decodeURIComponent(req.originalUrl);
+  const match = decodedUrl.match(
+    /(?:redirectTo|callbackUrl|callbackURL|ctTo)=([^&]+)/i,
+  );
+
+  return getTrustedFrontendRedirect(match?.[1]);
+};
+
 const app: Application = express();
 app.set("query parser", (str: string) => qs.parse(str));
+app.set("trust proxy", 1);
 
 app.set("view engine", "ejs");
 app.set("views", path.resolve(process.cwd(), `src/app/templates`));
@@ -41,6 +82,25 @@ app.use(
 );
 app.use(cookieParser());
 app.use(attachRequestUser);
+app.get("/api/auth/sign-in/social", (req, res, next) => {
+  const provider =
+    typeof req.query.provider === "string" ? req.query.provider : "";
+
+  if (!provider.toLowerCase().startsWith("goog")) {
+    return next();
+  }
+
+  const redirectUrl = new URL(
+    `${envVariables.BETTER_AUTH_URL.replace(/\/$/, "")}/api/v1/auth/google`,
+  );
+
+  redirectUrl.searchParams.set(
+    "callbackUrl",
+    getBrokenGoogleRedirectTarget(req),
+  );
+
+  return res.redirect(307, redirectUrl.toString());
+});
 app.use("/api/auth/sign-up/email", (req, res, next) => {
   if (req.body?.role && req.body.role !== "MEMBER") {
     return res.status(403).json({
