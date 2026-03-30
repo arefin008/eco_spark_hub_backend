@@ -4,9 +4,9 @@ EcoSpark Hub Backend is a RESTful API for a sustainability-focused community pla
 
 ## Live URLs
 
-- Frontend: `Add your deployed frontend URL here`
-- Backend API: `Add your deployed backend URL here`
-- Repository: `https://github.com/arefin008/eco_spark_hub_backend`
+- Frontend: https://ecospark-hub-frontend.vercel.app/
+- Backend API: https://ecosparkhubbackend.vercel.app/
+- Repository: https://github.com/arefin008/eco_spark_hub_backend
 
 ## Project Description
 
@@ -77,7 +77,7 @@ Main modules:
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/arefin008/eco_spark_hub_backend.git
+git clone https://github.com/arefin008/eco_spark_hub_backend
 cd eco_spark_hub_backend
 ```
 
