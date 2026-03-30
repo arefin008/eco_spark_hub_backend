@@ -33,6 +33,23 @@ type TIdeaRequestUser = {
   role: "MEMBER" | "ADMIN";
 };
 
+const createLockedIdeaResponse = (
+  idea: TIdeaBaseWithRelations,
+  lockReason: string,
+  accessState: "LOGIN_REQUIRED" | "PURCHASE_REQUIRED" | "UNAVAILABLE",
+) => ({
+  id: idea.id,
+  title: idea.title,
+  isPaid: idea.isPaid,
+  price: idea.price,
+  category: idea.category,
+  author: idea.author,
+  createdAt: idea.createdAt,
+  canAccess: false as const,
+  lockReason,
+  accessState,
+});
+
 const shapeIdea = (idea: TIdeaBaseWithRelations): IShapedIdea => {
   const upvotes = idea.votes.filter((v) => v.type === VoteType.UPVOTE).length;
   const downvotes = idea.votes.filter((v) => v.type === VoteType.DOWNVOTE).length;
@@ -206,7 +223,11 @@ const getById = async (id: string, user?: TIdeaRequestUser) => {
   const isAdmin = user?.role === "ADMIN";
 
   if (idea.status !== IdeaStatus.APPROVED && !isOwner && !isAdmin) {
-    throw new AppError(404, "Idea not found");
+    return createLockedIdeaResponse(
+      idea,
+      "This idea is not publicly available yet",
+      "UNAVAILABLE",
+    );
   }
 
   if (!idea.isPaid) {
@@ -218,17 +239,11 @@ const getById = async (id: string, user?: TIdeaRequestUser) => {
   }
 
   if (!user?.id) {
-    return {
-      id: idea.id,
-      title: idea.title,
-      isPaid: true,
-      price: idea.price,
-      category: idea.category,
-      author: idea.author,
-      createdAt: idea.createdAt,
-      canAccess: false,
-      lockReason: "Login and purchase required",
-    };
+    return createLockedIdeaResponse(
+      idea,
+      "Login and purchase required",
+      "LOGIN_REQUIRED",
+    );
   }
 
   const purchase = await prisma.ideaPurchase.findFirst({
@@ -240,17 +255,7 @@ const getById = async (id: string, user?: TIdeaRequestUser) => {
   });
 
   if (!purchase) {
-    return {
-      id: idea.id,
-      title: idea.title,
-      isPaid: true,
-      price: idea.price,
-      category: idea.category,
-      author: idea.author,
-      createdAt: idea.createdAt,
-      canAccess: false,
-      lockReason: "Purchase required",
-    };
+    return createLockedIdeaResponse(idea, "Purchase required", "PURCHASE_REQUIRED");
   }
 
   return { ...shaped, canAccess: true };

@@ -4,6 +4,7 @@ import { envVariables } from "../../config/env";
 import AppError from "../../errorHelpers/AppError";
 import { catchAsync } from "../../shared/catchAsync";
 import { sendResponse } from "../../shared/sendResponse";
+import { authCookieSettings } from "../../utils/authCookie";
 import { tokenUtils } from "../../utils/token";
 import { AuthService } from "./auth.service";
 
@@ -48,6 +49,89 @@ const toWebHeaders = (req: Request) => {
   });
 
   return headers;
+};
+
+const getSetCookieHeaders = (headers: Headers) => {
+  const getSetCookie = (
+    headers as Headers & { getSetCookie?: () => string[] }
+  ).getSetCookie;
+
+  if (typeof getSetCookie === "function") {
+    return getSetCookie.call(headers);
+  }
+
+  const cookieHeader = headers.get("set-cookie");
+
+  if (!cookieHeader) {
+    return [];
+  }
+
+  const cookies: string[] = [];
+  let start = 0;
+  let inExpiresAttribute = false;
+
+  for (let index = 0; index < cookieHeader.length; index += 1) {
+    const current = cookieHeader[index];
+    const ahead = cookieHeader.slice(index, index + 8).toLowerCase();
+
+    if (ahead === "expires=") {
+      inExpiresAttribute = true;
+      continue;
+    }
+
+    if (inExpiresAttribute && current === ";") {
+      inExpiresAttribute = false;
+      continue;
+    }
+
+    if (!inExpiresAttribute && current === ",") {
+      const next = cookieHeader.slice(index + 1);
+
+      if (/^\s*[^=;, ]+=/.test(next)) {
+        cookies.push(cookieHeader.slice(start, index).trim());
+        start = index + 1;
+      }
+    }
+  }
+
+  cookies.push(cookieHeader.slice(start).trim());
+
+  return cookies.filter(Boolean);
+};
+
+const applyResponseCookies = (res: Response, headers: Headers) => {
+  const cookies = getSetCookieHeaders(headers);
+
+  if (cookies.length > 0) {
+    res.setHeader("set-cookie", cookies);
+  }
+};
+
+const logGoogleCallbackDiagnostics = (
+  req: Request,
+  redirectTo: string,
+  sessionToken?: string,
+) => {
+  console.log("google callback", {
+    url: req.originalUrl,
+    host: req.headers.host,
+    origin: req.headers.origin,
+    referer: req.headers.referer,
+    xForwardedHost: req.headers["x-forwarded-host"],
+    xForwardedProto: req.headers["x-forwarded-proto"],
+    callbackOrigin: `${req.protocol}://${req.get("host")}`,
+    resolvedRedirectTo: redirectTo,
+    hasSessionTokenCookie: Boolean(sessionToken),
+    redirectingToFrontend: redirectTo.startsWith(envVariables.FRONTEND_URL),
+  });
+
+  console.log("google callback cookie config", {
+    domain: null,
+    path: "/",
+    sameSite: authCookieSettings.sameSite,
+    secure: authCookieSettings.shouldUseSecureCookies,
+    httpOnly: true,
+  });
 };
 
 const register = catchAsync(async (req: Request, res: Response) => {
@@ -132,11 +216,26 @@ const refreshToken = catchAsync(async (req: Request, res: Response) => {
 
 const googleSignIn = catchAsync(async (req: Request, res: Response) => {
   const callbackUrl = getGoogleCallbackUrlFromRequest(req);
+  const authResponse = await AuthService.startGoogleSignIn(callbackUrl);
 
-  res.redirect(
-    status.TEMPORARY_REDIRECT,
-    await AuthService.getGoogleSignInUrl(callbackUrl),
-  );
+  applyResponseCookies(res, authResponse.headers);
+
+  const location = authResponse.headers.get("location");
+
+  if (location) {
+    return res.redirect(
+      authResponse.status >= 300 && authResponse.status < 400
+        ? authResponse.status
+        : status.TEMPORARY_REDIRECT,
+      location,
+    );
+  }
+
+  const payload = await authResponse.text();
+  return res
+    .status(authResponse.status)
+    .type(authResponse.headers.get("content-type") || "application/json")
+    .send(payload);
 });
 
 const googleSignInUrl = catchAsync(async (req: Request, res: Response) => {
@@ -175,6 +274,8 @@ const googleCallback = catchAsync(async (req: Request, res: Response) => {
     typeof req.query.redirectTo === "string"
       ? req.query.redirectTo
       : envVariables.FRONTEND_URL;
+
+  logGoogleCallbackDiagnostics(req, redirectTo, sessionToken);
 
   res.redirect(status.TEMPORARY_REDIRECT, redirectTo);
 });

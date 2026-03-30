@@ -91,6 +91,7 @@ const getMine = async (userId: string) => {
           title: true,
           isPaid: true,
           price: true,
+          status: true,
         },
       },
     },

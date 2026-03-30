@@ -1,6 +1,5 @@
 import { CookieOptions, Response } from "express";
 import { JwtPayload, SignOptions } from "jsonwebtoken";
-import ms, { StringValue } from "ms";
 import { envVariables } from "../config/env";
 import { authCookieSettings } from "./authCookie";
 import { CookieUtils } from "./cookie";
@@ -14,12 +13,34 @@ type TAuthTokenPayload = JwtPayload & {
   emailVerified?: boolean;
 };
 
+const SEVEN_DAYS_IN_MS = 7 * 24 * 60 * 60 * 1000;
+
 const getCookieCommonOptions = (): CookieOptions => ({
   httpOnly: true,
-  secure: authCookieSettings.shouldUseSecureCookies,
+  secure: true,
   sameSite: authCookieSettings.sameSite,
   path: "/",
+  maxAge: SEVEN_DAYS_IN_MS,
 });
+
+const logCookieOperation = (
+  action: "set" | "clear",
+  key: string,
+  options: CookieOptions,
+) => {
+  if (envVariables.NODE_ENV !== "production") {
+    console.log("auth cookie", {
+      action,
+      key,
+      domain: options.domain ?? null,
+      path: options.path ?? null,
+      sameSite: options.sameSite ?? null,
+      secure: options.secure ?? null,
+      httpOnly: options.httpOnly ?? null,
+      maxAge: options.maxAge ?? null,
+    });
+  }
+};
 
 const getAccessToken = (payload: TAuthTokenPayload) => {
   return jwtUtils.createToken(payload, envVariables.ACCESS_TOKEN_SECRET, {
@@ -34,33 +55,39 @@ const getRefreshToken = (payload: TAuthTokenPayload) => {
 };
 
 const setAccessTokenCookie = (res: Response, token: string) => {
-  CookieUtils.setCookie(res, "accessToken", token, {
-    ...getCookieCommonOptions(),
-    maxAge: ms(envVariables.ACCESS_TOKEN_EXPIRES_IN as StringValue),
-  });
+  const options = getCookieCommonOptions();
+
+  logCookieOperation("set", "accessToken", options);
+  CookieUtils.setCookie(res, "accessToken", token, options);
 };
 
 const setRefreshTokenCookie = (res: Response, token: string) => {
-  CookieUtils.setCookie(res, "refreshToken", token, {
-    ...getCookieCommonOptions(),
-    maxAge: ms(envVariables.REFRESH_TOKEN_EXPIRES_IN as StringValue),
-  });
+  const options = getCookieCommonOptions();
+
+  logCookieOperation("set", "refreshToken", options);
+  CookieUtils.setCookie(res, "refreshToken", token, options);
 };
 
 const setBetterAuthSessionCookie = (res: Response, token: string) => {
-  CookieUtils.setCookie(res, "better-auth.session_token", token, {
-    ...getCookieCommonOptions(),
-    maxAge: ms(
-      envVariables.BETTER_AUTH_SESSION_TOKEN_EXPIRES_IN as StringValue,
-    ),
-  });
+  const options = getCookieCommonOptions();
+
+  logCookieOperation("set", "better-auth.session_token", options);
+  CookieUtils.setCookie(res, "better-auth.session_token", token, options);
 };
 
 const clearAuthCookies = (res: Response) => {
-  const options = getCookieCommonOptions();
+  const options = {
+    httpOnly: true,
+    secure: true,
+    sameSite: authCookieSettings.sameSite,
+    path: "/",
+  } satisfies CookieOptions;
 
+  logCookieOperation("clear", "accessToken", options);
   CookieUtils.clearCookie(res, "accessToken", options);
+  logCookieOperation("clear", "refreshToken", options);
   CookieUtils.clearCookie(res, "refreshToken", options);
+  logCookieOperation("clear", "better-auth.session_token", options);
   CookieUtils.clearCookie(res, "better-auth.session_token", options);
 };
 

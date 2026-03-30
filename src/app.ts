@@ -11,6 +11,21 @@ import { globalErrorHandler } from "./app/middleware/globalErrorHandler";
 import { notFound } from "./app/middleware/notFound";
 import { IndexRoutes } from "./app/routes";
 
+const toOrigin = (value: string) => {
+  try {
+    return new URL(value).origin;
+  } catch {
+    return value.replace(/\/$/, "");
+  }
+};
+
+const allowedCorsOrigins = new Set([
+  toOrigin(envVariables.FRONTEND_URL),
+  toOrigin(envVariables.BETTER_AUTH_URL),
+  "http://localhost:3000",
+  "http://localhost:5000",
+]);
+
 const getTrustedFrontendRedirect = (value?: string) => {
   if (!value) {
     return envVariables.FRONTEND_URL;
@@ -60,12 +75,14 @@ app.set("views", path.resolve(process.cwd(), `src/app/templates`));
 
 app.use(
   cors({
-    origin: [
-      envVariables.FRONTEND_URL,
-      envVariables.BETTER_AUTH_URL,
-      "http://localhost:3000",
-      "http://localhost:5000",
-    ],
+    origin: (origin, callback) => {
+      if (!origin || allowedCorsOrigins.has(origin)) {
+        callback(null, true);
+        return;
+      }
+
+      callback(new Error("CORS origin not allowed"));
+    },
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
     allowedHeaders: ["Content-Type", "Authorization", "x-refresh-token"],
@@ -91,7 +108,7 @@ app.get("/api/auth/sign-in/social", (req, res, next) => {
   }
 
   const redirectUrl = new URL(
-    `${envVariables.BETTER_AUTH_URL.replace(/\/$/, "")}/api/v1/auth/google`,
+    `${envVariables.FRONTEND_URL.replace(/\/$/, "")}/api/v1/auth/google`,
   );
 
   redirectUrl.searchParams.set(

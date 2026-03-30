@@ -7,6 +7,11 @@ import { authCookieSettings } from "../utils/authCookie";
 import { sendEmail } from "../utils/email";
 import { prisma } from "./prisma";
 
+const SEVEN_DAYS_IN_SECONDS = 7 * 24 * 60 * 60;
+const toOrigin = (value: string) => new URL(value).origin;
+const AUTH_PUBLIC_URL = envVariables.FRONTEND_URL.replace(/\/$/, "");
+const GOOGLE_REDIRECT_URI = `${AUTH_PUBLIC_URL}/api/auth/callback/google`;
+
 const userAdditionalFields = {
   role: {
     type: "string",
@@ -21,7 +26,7 @@ const userAdditionalFields = {
 } as const;
 
 export const auth = betterAuth({
-  baseURL: envVariables.BETTER_AUTH_URL,
+  baseURL: AUTH_PUBLIC_URL,
   secret: envVariables.BETTER_AUTH_SECRET,
   database: prismaAdapter(prisma, { provider: "postgresql" }),
   account: {
@@ -48,9 +53,7 @@ export const auth = betterAuth({
     google: {
       clientId: envVariables.GOOGLE_CLIENT_ID,
       clientSecret: envVariables.GOOGLE_CLIENT_SECRET,
-      redirectURI:
-        envVariables.GOOGLE_CALLBACK_URL ||
-        `${envVariables.BETTER_AUTH_URL.replace(/\/$/, "")}/api/auth/callback/google`,
+      redirectURI: GOOGLE_REDIRECT_URI,
       mapProfileToUser: () => ({
         role: UserRole.MEMBER,
         status: UserStatus.ACTIVE,
@@ -78,13 +81,13 @@ export const auth = betterAuth({
     additionalFields: userAdditionalFields,
   },
   session: {
-    expiresIn: 60 * 60 * 24,
+    expiresIn: SEVEN_DAYS_IN_SECONDS,
     updateAge: 60 * 60 * 12,
   },
-  redirectURLs: {
-    signIn: `${envVariables.BETTER_AUTH_URL}/api/v1/auth/google/callback`,
-  },
-  trustedOrigins: [envVariables.FRONTEND_URL, envVariables.BETTER_AUTH_URL],
+  trustedOrigins: [
+    toOrigin(envVariables.FRONTEND_URL),
+    toOrigin(envVariables.BETTER_AUTH_URL),
+  ],
   plugins: [
     bearer(),
     emailOTP({
@@ -118,5 +121,16 @@ export const auth = betterAuth({
   ],
   advanced: {
     useSecureCookies: authCookieSettings.shouldUseSecureCookies,
+    cookies: {
+      session_token: {
+        attributes: {
+          httpOnly: true,
+          secure: true,
+          sameSite: authCookieSettings.sameSite,
+          path: "/",
+          maxAge: SEVEN_DAYS_IN_SECONDS,
+        },
+      },
+    },
   },
 });

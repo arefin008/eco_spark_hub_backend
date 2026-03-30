@@ -94,10 +94,13 @@ const getTrustedCallbackUrl = (callbackUrl?: string) => {
 
 const getGoogleCallbackHandlerUrl = (redirectTo?: string) => {
   const callbackUrl = new URL(
-    `${envVariables.BETTER_AUTH_URL.replace(/\/$/, "")}/api/v1/auth/google/callback`,
+    `${envVariables.FRONTEND_URL.replace(/\/$/, "")}/api/v1/auth/google/callback`,
   );
 
-  callbackUrl.searchParams.set("redirectTo", getTrustedCallbackUrl(redirectTo));
+  callbackUrl.searchParams.set(
+    "redirectTo",
+    getTrustedCallbackUrl(redirectTo),
+  );
 
   return callbackUrl.toString();
 };
@@ -336,6 +339,16 @@ const getGoogleSignInUrl = async (callbackUrl?: string) => {
   return payload.url;
 };
 
+const startGoogleSignIn = async (callbackUrl?: string) => {
+  return auth.api.signInSocial({
+    body: {
+      provider: "google",
+      callbackURL: getGoogleCallbackHandlerUrl(callbackUrl),
+    },
+    asResponse: true,
+  });
+};
+
 const completeSocialLogin = async (
   requestHeaders: Headers,
   sessionToken: string,
@@ -507,6 +520,7 @@ export const AuthService = {
   login,
   getNewToken,
   getGoogleSignInUrl,
+  startGoogleSignIn,
   completeSocialLogin,
   changePassword,
   logout,

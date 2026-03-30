@@ -119,35 +119,11 @@ var loadEnvVariables = () => {
 var envVariables = loadEnvVariables();
 
 // src/app/utils/authCookie.ts
-var parseUrl = (value) => {
-  try {
-    return new URL(value);
-  } catch {
-    return null;
-  }
-};
-var isLoopbackHostname = (hostname) => {
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]";
-};
-var getSiteKey = (url) => {
-  const hostname = url.hostname.toLowerCase();
-  if (isLoopbackHostname(hostname)) {
-    return `${url.protocol}//${hostname}`;
-  }
-  const parts = hostname.split(".").filter(Boolean);
-  if (parts.length <= 2) {
-    return `${url.protocol}//${hostname}`;
-  }
-  return `${url.protocol}//${parts.slice(-2).join(".")}`;
-};
-var frontendUrl = parseUrl(envVariables.FRONTEND_URL);
-var backendUrl = parseUrl(envVariables.BETTER_AUTH_URL);
-var shouldUseCrossSiteCookies = frontendUrl && backendUrl ? getSiteKey(frontendUrl) !== getSiteKey(backendUrl) : envVariables.NODE_ENV === "production";
-var shouldUseSecureCookies = backendUrl?.protocol === "https:" || shouldUseCrossSiteCookies && envVariables.NODE_ENV === "production";
+var shouldUseSecureCookies = envVariables.BETTER_AUTH_URL.startsWith("https://") || envVariables.NODE_ENV === "production";
+var sameSite = envVariables.NODE_ENV === "production" ? "none" : "lax";
 var authCookieSettings = {
-  shouldUseCrossSiteCookies,
   shouldUseSecureCookies,
-  sameSite: shouldUseCrossSiteCookies ? "none" : "lax"
+  sameSite
 };
 
 // src/app/utils/email.ts
@@ -469,6 +445,10 @@ if (envVariables.NODE_ENV !== "production") {
 }
 
 // src/app/lib/auth.ts
+var SEVEN_DAYS_IN_SECONDS = 7 * 24 * 60 * 60;
+var toOrigin = (value) => new URL(value).origin;
+var AUTH_PUBLIC_URL = envVariables.FRONTEND_URL.replace(/\/$/, "");
+var GOOGLE_REDIRECT_URI = `${AUTH_PUBLIC_URL}/api/auth/callback/google`;
 var userAdditionalFields = {
   role: {
     type: "string",
@@ -482,7 +462,7 @@ var userAdditionalFields = {
   }
 };
 var auth = betterAuth({
-  baseURL: envVariables.BETTER_AUTH_URL,
+  baseURL: AUTH_PUBLIC_URL,
   secret: envVariables.BETTER_AUTH_SECRET,
   database: prismaAdapter(prisma, { provider: "postgresql" }),
   account: {
@@ -509,7 +489,7 @@ var auth = betterAuth({
     google: {
       clientId: envVariables.GOOGLE_CLIENT_ID,
       clientSecret: envVariables.GOOGLE_CLIENT_SECRET,
-      redirectURI: envVariables.GOOGLE_CALLBACK_URL || `${envVariables.BETTER_AUTH_URL.replace(/\/$/, "")}/api/auth/callback/google`,
+      redirectURI: GOOGLE_REDIRECT_URI,
       mapProfileToUser: () => ({
         role: UserRole.MEMBER,
         status: UserStatus.ACTIVE,
@@ -537,13 +517,13 @@ var auth = betterAuth({
     additionalFields: userAdditionalFields
   },
   session: {
-    expiresIn: 60 * 60 * 24,
+    expiresIn: SEVEN_DAYS_IN_SECONDS,
     updateAge: 60 * 60 * 12
   },
-  redirectURLs: {
-    signIn: `${envVariables.BETTER_AUTH_URL}/api/v1/auth/google/callback`
-  },
-  trustedOrigins: [envVariables.FRONTEND_URL, envVariables.BETTER_AUTH_URL],
+  trustedOrigins: [
+    toOrigin(envVariables.FRONTEND_URL),
+    toOrigin(envVariables.BETTER_AUTH_URL)
+  ],
   plugins: [
     bearer(),
     emailOTP({
@@ -571,7 +551,18 @@ var auth = betterAuth({
     })
   ],
   advanced: {
-    useSecureCookies: authCookieSettings.shouldUseSecureCookies
+    useSecureCookies: authCookieSettings.shouldUseSecureCookies,
+    cookies: {
+      session_token: {
+        attributes: {
+          httpOnly: true,
+          secure: true,
+          sameSite: authCookieSettings.sameSite,
+          path: "/",
+          maxAge: SEVEN_DAYS_IN_SECONDS
+        }
+      }
+    }
   }
 });
 
@@ -1063,9 +1054,6 @@ import { Router as Router2 } from "express";
 // src/app/modules/auth/auth.controller.ts
 import status7 from "http-status";
 
-// src/app/utils/token.ts
-import ms from "ms";
-
 // src/app/utils/cookie.ts
 var setCookie = (res, key, value, options) => {
   res.cookie(key, value, options);
@@ -1084,12 +1072,28 @@ var CookieUtils = {
 };
 
 // src/app/utils/token.ts
+var SEVEN_DAYS_IN_MS = 7 * 24 * 60 * 60 * 1e3;
 var getCookieCommonOptions = () => ({
   httpOnly: true,
-  secure: authCookieSettings.shouldUseSecureCookies,
+  secure: true,
   sameSite: authCookieSettings.sameSite,
-  path: "/"
+  path: "/",
+  maxAge: SEVEN_DAYS_IN_MS
 });
+var logCookieOperation = (action, key, options) => {
+  if (envVariables.NODE_ENV !== "production") {
+    console.log("auth cookie", {
+      action,
+      key,
+      domain: options.domain ?? null,
+      path: options.path ?? null,
+      sameSite: options.sameSite ?? null,
+      secure: options.secure ?? null,
+      httpOnly: options.httpOnly ?? null,
+      maxAge: options.maxAge ?? null
+    });
+  }
+};
 var getAccessToken = (payload) => {
   return jwtUtils.createToken(payload, envVariables.ACCESS_TOKEN_SECRET, {
     expiresIn: envVariables.ACCESS_TOKEN_EXPIRES_IN
@@ -1101,29 +1105,32 @@ var getRefreshToken = (payload) => {
   });
 };
 var setAccessTokenCookie = (res, token) => {
-  CookieUtils.setCookie(res, "accessToken", token, {
-    ...getCookieCommonOptions(),
-    maxAge: ms(envVariables.ACCESS_TOKEN_EXPIRES_IN)
-  });
+  const options = getCookieCommonOptions();
+  logCookieOperation("set", "accessToken", options);
+  CookieUtils.setCookie(res, "accessToken", token, options);
 };
 var setRefreshTokenCookie = (res, token) => {
-  CookieUtils.setCookie(res, "refreshToken", token, {
-    ...getCookieCommonOptions(),
-    maxAge: ms(envVariables.REFRESH_TOKEN_EXPIRES_IN)
-  });
+  const options = getCookieCommonOptions();
+  logCookieOperation("set", "refreshToken", options);
+  CookieUtils.setCookie(res, "refreshToken", token, options);
 };
 var setBetterAuthSessionCookie = (res, token) => {
-  CookieUtils.setCookie(res, "better-auth.session_token", token, {
-    ...getCookieCommonOptions(),
-    maxAge: ms(
-      envVariables.BETTER_AUTH_SESSION_TOKEN_EXPIRES_IN
-    )
-  });
+  const options = getCookieCommonOptions();
+  logCookieOperation("set", "better-auth.session_token", options);
+  CookieUtils.setCookie(res, "better-auth.session_token", token, options);
 };
 var clearAuthCookies = (res) => {
-  const options = getCookieCommonOptions();
+  const options = {
+    httpOnly: true,
+    secure: true,
+    sameSite: authCookieSettings.sameSite,
+    path: "/"
+  };
+  logCookieOperation("clear", "accessToken", options);
   CookieUtils.clearCookie(res, "accessToken", options);
+  logCookieOperation("clear", "refreshToken", options);
   CookieUtils.clearCookie(res, "refreshToken", options);
+  logCookieOperation("clear", "better-auth.session_token", options);
   CookieUtils.clearCookie(res, "better-auth.session_token", options);
 };
 var tokenUtils = {
@@ -1192,9 +1199,12 @@ var getTrustedCallbackUrl = (callbackUrl) => {
 };
 var getGoogleCallbackHandlerUrl = (redirectTo) => {
   const callbackUrl = new URL(
-    `${envVariables.BETTER_AUTH_URL.replace(/\/$/, "")}/api/v1/auth/google/callback`
+    `${envVariables.FRONTEND_URL.replace(/\/$/, "")}/api/v1/auth/google/callback`
   );
-  callbackUrl.searchParams.set("redirectTo", getTrustedCallbackUrl(redirectTo));
+  callbackUrl.searchParams.set(
+    "redirectTo",
+    getTrustedCallbackUrl(redirectTo)
+  );
   return callbackUrl.toString();
 };
 var toTokenPayload = (user) => ({
@@ -1364,6 +1374,15 @@ var getGoogleSignInUrl = async (callbackUrl) => {
   }
   return payload.url;
 };
+var startGoogleSignIn = async (callbackUrl) => {
+  return auth.api.signInSocial({
+    body: {
+      provider: "google",
+      callbackURL: getGoogleCallbackHandlerUrl(callbackUrl)
+    },
+    asResponse: true
+  });
+};
 var completeSocialLogin = async (requestHeaders, sessionToken) => {
   let user = null;
   try {
@@ -1500,6 +1519,7 @@ var AuthService = {
   login,
   getNewToken,
   getGoogleSignInUrl,
+  startGoogleSignIn,
   completeSocialLogin,
   changePassword,
   logout,
@@ -1541,6 +1561,67 @@ var toWebHeaders2 = (req) => {
     }
   });
   return headers;
+};
+var getSetCookieHeaders = (headers) => {
+  const getSetCookie = headers.getSetCookie;
+  if (typeof getSetCookie === "function") {
+    return getSetCookie.call(headers);
+  }
+  const cookieHeader = headers.get("set-cookie");
+  if (!cookieHeader) {
+    return [];
+  }
+  const cookies = [];
+  let start = 0;
+  let inExpiresAttribute = false;
+  for (let index = 0; index < cookieHeader.length; index += 1) {
+    const current = cookieHeader[index];
+    const ahead = cookieHeader.slice(index, index + 8).toLowerCase();
+    if (ahead === "expires=") {
+      inExpiresAttribute = true;
+      continue;
+    }
+    if (inExpiresAttribute && current === ";") {
+      inExpiresAttribute = false;
+      continue;
+    }
+    if (!inExpiresAttribute && current === ",") {
+      const next = cookieHeader.slice(index + 1);
+      if (/^\s*[^=;, ]+=/.test(next)) {
+        cookies.push(cookieHeader.slice(start, index).trim());
+        start = index + 1;
+      }
+    }
+  }
+  cookies.push(cookieHeader.slice(start).trim());
+  return cookies.filter(Boolean);
+};
+var applyResponseCookies = (res, headers) => {
+  const cookies = getSetCookieHeaders(headers);
+  if (cookies.length > 0) {
+    res.setHeader("set-cookie", cookies);
+  }
+};
+var logGoogleCallbackDiagnostics = (req, redirectTo, sessionToken) => {
+  console.log("google callback", {
+    url: req.originalUrl,
+    host: req.headers.host,
+    origin: req.headers.origin,
+    referer: req.headers.referer,
+    xForwardedHost: req.headers["x-forwarded-host"],
+    xForwardedProto: req.headers["x-forwarded-proto"],
+    callbackOrigin: `${req.protocol}://${req.get("host")}`,
+    resolvedRedirectTo: redirectTo,
+    hasSessionTokenCookie: Boolean(sessionToken),
+    redirectingToFrontend: redirectTo.startsWith(envVariables.FRONTEND_URL)
+  });
+  console.log("google callback cookie config", {
+    domain: null,
+    path: "/",
+    sameSite: authCookieSettings.sameSite,
+    secure: authCookieSettings.shouldUseSecureCookies,
+    httpOnly: true
+  });
 };
 var register2 = catchAsync(async (req, res) => {
   if (req.body?.role === "ADMIN") {
@@ -1605,10 +1686,17 @@ var refreshToken = catchAsync(async (req, res) => {
 });
 var googleSignIn = catchAsync(async (req, res) => {
   const callbackUrl = getGoogleCallbackUrlFromRequest(req);
-  res.redirect(
-    status7.TEMPORARY_REDIRECT,
-    await AuthService.getGoogleSignInUrl(callbackUrl)
-  );
+  const authResponse = await AuthService.startGoogleSignIn(callbackUrl);
+  applyResponseCookies(res, authResponse.headers);
+  const location = authResponse.headers.get("location");
+  if (location) {
+    return res.redirect(
+      authResponse.status >= 300 && authResponse.status < 400 ? authResponse.status : status7.TEMPORARY_REDIRECT,
+      location
+    );
+  }
+  const payload = await authResponse.text();
+  return res.status(authResponse.status).type(authResponse.headers.get("content-type") || "application/json").send(payload);
 });
 var googleSignInUrl = catchAsync(async (req, res) => {
   const callbackUrl = getGoogleCallbackUrlFromRequest(req);
@@ -1634,6 +1722,7 @@ var googleCallback = catchAsync(async (req, res) => {
   tokenUtils.setRefreshTokenCookie(res, result.refreshToken);
   tokenUtils.setBetterAuthSessionCookie(res, result.sessionToken);
   const redirectTo = typeof req.query.redirectTo === "string" ? req.query.redirectTo : envVariables.FRONTEND_URL;
+  logGoogleCallbackDiagnostics(req, redirectTo, sessionToken);
   res.redirect(status7.TEMPORARY_REDIRECT, redirectTo);
 });
 var me = catchAsync(async (req, res) => {
@@ -3164,7 +3253,8 @@ var getMine3 = async (userId) => {
           id: true,
           title: true,
           isPaid: true,
-          price: true
+          price: true,
+          status: true
         }
       }
     },
@@ -3469,14 +3559,27 @@ router11.use("/newsletters", NewsletterRoutes);
 var IndexRoutes = router11;
 
 // src/app.ts
+var toOrigin2 = (value) => {
+  try {
+    return new URL(value).origin;
+  } catch {
+    return value.replace(/\/$/, "");
+  }
+};
+var allowedCorsOrigins = /* @__PURE__ */ new Set([
+  toOrigin2(envVariables.FRONTEND_URL),
+  toOrigin2(envVariables.BETTER_AUTH_URL),
+  "http://localhost:3000",
+  "http://localhost:5000"
+]);
 var getTrustedFrontendRedirect = (value) => {
   if (!value) {
     return envVariables.FRONTEND_URL;
   }
   try {
     const requestedUrl = new URL(value);
-    const frontendUrl2 = new URL(envVariables.FRONTEND_URL);
-    if (requestedUrl.origin !== frontendUrl2.origin) {
+    const frontendUrl = new URL(envVariables.FRONTEND_URL);
+    if (requestedUrl.origin !== frontendUrl.origin) {
       return envVariables.FRONTEND_URL;
     }
     return requestedUrl.toString();
@@ -3508,12 +3611,13 @@ app.set("view engine", "ejs");
 app.set("views", path3.resolve(process.cwd(), `src/app/templates`));
 app.use(
   cors({
-    origin: [
-      envVariables.FRONTEND_URL,
-      envVariables.BETTER_AUTH_URL,
-      "http://localhost:3000",
-      "http://localhost:5000"
-    ],
+    origin: (origin, callback) => {
+      if (!origin || allowedCorsOrigins.has(origin)) {
+        callback(null, true);
+        return;
+      }
+      callback(new Error("CORS origin not allowed"));
+    },
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
     allowedHeaders: ["Content-Type", "Authorization", "x-refresh-token"]
@@ -3535,7 +3639,7 @@ app.get("/api/auth/sign-in/social", (req, res, next) => {
     return next();
   }
   const redirectUrl = new URL(
-    `${envVariables.BETTER_AUTH_URL.replace(/\/$/, "")}/api/v1/auth/google`
+    `${envVariables.FRONTEND_URL.replace(/\/$/, "")}/api/v1/auth/google`
   );
   redirectUrl.searchParams.set(
     "callbackUrl",
