@@ -36,6 +36,10 @@ interface EnvConfig {
     STRIPE_SECRET_KEY: string;
     STRIPE_WEBHOOK_SECRET: string;
   };
+  GEMINI: {
+    API_KEY: string;
+    MODEL: string;
+  };
   SUPER_ADMIN_EMAIL: string;
   SUPER_ADMIN_PASSWORD: string;
 }
@@ -94,6 +98,10 @@ const loadEnvVariables = (): EnvConfig => {
     STRIPE: {
       STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY || "",
       STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET || "",
+    },
+    GEMINI: {
+      API_KEY: process.env.GEMINI_API_KEY || "",
+      MODEL: process.env.GEMINI_MODEL || "gemini-2.5-flash-lite",
     },
     SUPER_ADMIN_EMAIL: process.env.SUPER_ADMIN_EMAIL || "",
     SUPER_ADMIN_PASSWORD: process.env.SUPER_ADMIN_PASSWORD || "",
