@@ -8,12 +8,10 @@ dist
 /src/generated
 /generated/prisma
 
-1.EcoSpark-Hub.md
 
 CHANGELOG.md
 
 postman/
 docs/
 
-ALL_ROUTES.md
 .vercel
